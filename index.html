@@ -1,0 +1,140 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ElevateX Live Traffic Injector - MSFS 2024</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #101828;
+            color: #e1e7ef;
+            line-height: 1.6;
+        }
+        .header {
+            background: linear-gradient(135deg, #141c2b 0%, #1a2334 100%);
+            border-bottom: 3px solid #faa307;
+            padding: 48px 20px;
+            text-align: center;
+        }
+        .header img {
+            width: 96px; height: 96px;
+            border-radius: 20px;
+            margin-bottom: 16px;
+        }
+        .header h1 {
+            font-size: 2.2em;
+            color: #faa307;
+            margin-bottom: 8px;
+        }
+        .header p { color: #8b9ab5; font-size: 1.1em; }
+        .container { max-width: 760px; margin: 0 auto; padding: 32px 20px; }
+        .card {
+            background: #1a2334;
+            border: 1px solid #2b3648;
+            border-radius: 12px;
+            padding: 28px;
+            margin-bottom: 24px;
+        }
+        .card h2 {
+            color: #faa307;
+            font-size: 1.3em;
+            margin-bottom: 14px;
+        }
+        .card ul, .card ol { padding-left: 22px; }
+        .card li { margin-bottom: 8px; }
+        .download-btn {
+            display: inline-block;
+            background: #faa307;
+            color: #101828;
+            font-weight: 700;
+            font-size: 1.15em;
+            padding: 14px 36px;
+            border-radius: 8px;
+            text-decoration: none;
+            margin: 8px 0;
+            transition: background 0.2s;
+        }
+        .download-btn:hover { background: #ffb833; }
+        .bug {
+            background: #2a1a1a;
+            border-left: 3px solid #e74c3c;
+            padding: 10px 14px;
+            margin-bottom: 10px;
+            border-radius: 0 6px 6px 0;
+        }
+        code {
+            background: #232d42;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.92em;
+        }
+        .footer {
+            text-align: center;
+            padding: 24px;
+            color: #5a6a82;
+            font-size: 0.85em;
+            border-top: 1px solid #2b3648;
+        }
+        a { color: #faa307; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <img src="icon.png" alt="ElevateX Traffic Injector">
+        <h1>ElevateX Live Traffic Injector</h1>
+        <p>Real live traffic in MSFS 2024, powered by FSLTL</p>
+    </div>
+    <div class="container">
+        <div class="card" style="text-align:center;">
+            <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/download/v1/ElevateXTrafficInjector-V1.zip">Download V1</a>
+            <p style="color:#8b9ab5; margin-top:8px;">Windows &middot; 10.7 MB &middot; No Python required</p>
+        </div>
+
+        <div class="card">
+            <h2>What is this?</h2>
+            <p>A free addon that pulls live ElevateX network flights and injects them into MSFS 2024 as AI aircraft with proper FSLTL airline liveries. Watch real pilots fly around you in real time.</p>
+        </div>
+
+        <div class="card">
+            <h2>Requirements</h2>
+            <ul>
+                <li>Microsoft Flight Simulator 2024</li>
+                <li><a href="https://github.com/FSLTL/fsltl-traffic-base">FSLTL Traffic Base</a> installed in your Community folder</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>How to install</h2>
+            <ol>
+                <li>Download the zip above</li>
+                <li>Extract it anywhere</li>
+                <li>Start MSFS 2024 and load your flight</li>
+                <li>Run <code>ElevateXTrafficInjector.exe</code> as admin</li>
+                <li>Enter your ElevateX username (optional &mdash; excludes your own flights)</li>
+                <li>Press START</li>
+            </ol>
+        </div>
+
+        <div class="card">
+            <h2>How it works</h2>
+            <p>Every 12 seconds the injector downloads the ElevateX live feed, picks the flights nearest to you, matches each one to an FSLTL model and airline livery, and spawns them via SimConnect. Between feed updates it interpolates smooth motion so aircraft glide continuously instead of teleporting.</p>
+        </div>
+
+        <div class="card">
+            <h2>Known bugs (V1)</h2>
+            <div class="bug"><strong>Takeoff surge</strong> &mdash; aircraft on the runway can suddenly accelerate then settle repeatedly instead of rolling smoothly.</div>
+            <div class="bug"><strong>Pitch attitude</strong> &mdash; nose-up/down during climbs and descents is not always correct yet.</div>
+        </div>
+
+        <div class="card">
+            <h2>Source</h2>
+            <p><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector">github.com/FreedomStrider39/elevatex-traffic-injector</a></p>
+        </div>
+    </div>
+    <div class="footer">
+        Unofficial project &middot; Not affiliated with ElevateX &middot; Freeware
+    </div>
+</body>
+</html>
