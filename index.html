@@ -194,6 +194,58 @@
             color: #333;
             font-size: 0.82em;
         }
+
+        /* animations */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(24px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes pulseGlow {
+            0%, 100% { filter: drop-shadow(0 0 18px rgba(250,163,7,0.4)); }
+            50%      { filter: drop-shadow(0 0 30px rgba(250,163,7,0.7)); }
+        }
+        .fade-line {
+            display: inline-block;
+            opacity: 0;
+            animation: fadeUp 0.8s ease forwards;
+        }
+        .hero img.logo {
+            opacity: 0;
+            animation: fadeUp 0.7s ease 0.05s forwards;
+        }
+        .hero p {
+            opacity: 0;
+            animation: fadeUp 0.8s ease 1.3s forwards;
+        }
+        .hero .download-btn {
+            opacity: 0;
+            animation: fadeUp 0.8s ease 1.6s forwards;
+        }
+        .hero .meta {
+            opacity: 0;
+            animation: fadeIn 0.8s ease 1.9s forwards;
+        }
+        .hero h1 .live {
+            animation: fadeUp 0.8s ease 0.6s forwards, pulseGlow 3s ease-in-out 2s infinite;
+        }
+        .section {
+            opacity: 0;
+            animation: fadeUp 0.7s ease forwards;
+        }
+        .section:nth-of-type(1) { animation-delay: 0.1s; }
+        .section:nth-of-type(2) { animation-delay: 0.15s; }
+        .section:nth-of-type(3) { animation-delay: 0.2s; }
+        .section:nth-of-type(4) { animation-delay: 0.25s; }
+        .section:nth-of-type(5) { animation-delay: 0.3s; }
+        .section:nth-of-type(6) { animation-delay: 0.35s; }
+        .nav {
+            opacity: 0;
+            animation: fadeIn 0.5s ease 0.1s forwards;
+        }
     </style>
 </head>
 <body>
@@ -217,8 +269,8 @@
         <div class="hero">
             <div class="hero-ring"></div>
             <img class="logo" src="icon.png" alt="ElevateX Traffic Injector">
-            <h1>Real pilots.<br><span class="live">Real traffic.</span><br>In your sim.</h1>
-            <p>Real ELEVATEX flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
+            <h1><span class="fade-line" style="animation-delay:0.2s;">Real pilots.</span><br><span class="live fade-line" style="animation-delay:0.6s;">Real traffic.</span><br><span class="fade-line" style="animation-delay:1.0s;">In your sim.</span></h1>
+            <p><strong style="color:#ccc;">From your ELEVATEX flight tracker to your sim.</strong> Real live flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
             <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/download/v1/ElevateXTrafficInjector-V1.zip">Download V1</a>
             <div class="meta">Windows &middot; 10.7 MB &middot; No Python required</div>
         </div>
