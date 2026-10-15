@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+*.log
+*.err
+icon_raw.jpg
+ElevateXTrafficInjector-V1.zip
+diag*.py
+tools/

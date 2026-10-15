@@ -1,0 +1,20 @@
+﻿ElevateX Live Traffic Injector - License & Disclaimer
+=====================================================
+
+This is a FREEWARE addon, created independently and NOT for commercial use.
+
+NOT AFFILIATED WITH ELEVATEX
+----------------------------
+This software is an unofficial, independent project. I am not affiliated with,
+endorsed by, sponsored by, or connected to ElevateX in any way. All ElevateX
+names, trademarks, and feed data belong to their respective owners.
+
+NO WARRANTY
+-----------
+This software is provided "as is", without warranty of any kind, express or
+implied. Use at your own risk. The author is not responsible for any damage,
+issues, or consequences arising from the use of this software.
+
+REDISTRIBUTION
+--------------
+You may share this software freely, unmodified, for non-commercial purposes.
