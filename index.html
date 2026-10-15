@@ -208,40 +208,27 @@
             0%, 100% { filter: drop-shadow(0 0 18px rgba(250,163,7,0.4)); }
             50%      { filter: drop-shadow(0 0 30px rgba(250,163,7,0.7)); }
         }
+
+        /* hero catchphrase: staggered fade-in on load */
         .fade-line {
             display: inline-block;
             opacity: 0;
             animation: fadeUp 0.8s ease forwards;
         }
-        .hero img.logo {
-            opacity: 0;
-            animation: fadeUp 0.7s ease 0.05s forwards;
-        }
-        .hero p {
-            opacity: 0;
-            animation: fadeUp 0.8s ease 1.3s forwards;
-        }
-        .hero .download-btn {
-            opacity: 0;
-            animation: fadeUp 0.8s ease 1.6s forwards;
-        }
-        .hero .meta {
-            opacity: 0;
-            animation: fadeIn 0.8s ease 1.9s forwards;
-        }
         .hero h1 .live {
             animation: fadeUp 0.8s ease 0.6s forwards, pulseGlow 3s ease-in-out 2s infinite;
         }
-        .section {
+
+        /* everything else: scroll-triggered */
+        .reveal {
             opacity: 0;
-            animation: fadeUp 0.7s ease forwards;
+            transform: translateY(28px);
+            transition: opacity 0.7s ease, transform 0.7s ease;
         }
-        .section:nth-of-type(1) { animation-delay: 0.1s; }
-        .section:nth-of-type(2) { animation-delay: 0.15s; }
-        .section:nth-of-type(3) { animation-delay: 0.2s; }
-        .section:nth-of-type(4) { animation-delay: 0.25s; }
-        .section:nth-of-type(5) { animation-delay: 0.3s; }
-        .section:nth-of-type(6) { animation-delay: 0.35s; }
+        .reveal.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
         .nav {
             opacity: 0;
             animation: fadeIn 0.5s ease 0.1s forwards;
@@ -342,5 +329,20 @@
             Unofficial project &middot; Not affiliated with ELEVATEX &middot; Freeware
         </div>
     </div>
+
+    <script>
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+            if (e.isIntersecting) {
+                e.target.classList.add('visible');
+                observer.unobserve(e.target);
+            }
+        });
+    }, { threshold: 0.15 });
+    document.querySelectorAll('.section, .card, .bug-item').forEach(el => {
+        el.classList.add('reveal');
+        observer.observe(el);
+    });
+    </script>
 </body>
 </html>
