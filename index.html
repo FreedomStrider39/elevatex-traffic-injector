@@ -8,94 +8,123 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-            background: #0b0b0d;
+            background: #060608;
             color: #c8c8cc;
             line-height: 1.65;
+            overflow-x: hidden;
         }
+
+        /* ambient glow orbs */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.18;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .orb-1 { width: 600px; height: 600px; background: #faa307; top: -200px; left: -150px; }
+        .orb-2 { width: 500px; height: 500px; background: #c77800; bottom: -180px; right: -120px; opacity: 0.12; }
+        .orb-3 { width: 350px; height: 350px; background: #ffcc44; top: 40%; left: 55%; opacity: 0.07; }
+
+        .content { position: relative; z-index: 1; }
+
         .nav {
-            background: #141416;
-            border-bottom: 1px solid #222;
+            background: rgba(12,12,14,0.85);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid rgba(250,163,7,0.12);
             padding: 0 40px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             height: 64px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
-        .nav-brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .nav-brand img { height: 32px; }
+        .nav-brand { display: flex; align-items: center; gap: 12px; }
+        .nav-brand img { height: 30px; filter: drop-shadow(0 0 8px rgba(250,163,7,0.5)); }
         .nav-brand span {
-            font-size: 1.15em;
+            font-size: 1.1em;
             font-weight: 700;
             color: #fff;
             letter-spacing: 0.5px;
         }
-        .nav-links {
-            display: flex;
-            gap: 28px;
-            list-style: none;
-        }
+        .nav-links { display: flex; gap: 28px; list-style: none; }
         .nav-links a {
-            color: #999;
+            color: #777;
             text-decoration: none;
-            font-size: 0.92em;
+            font-size: 0.9em;
             font-weight: 500;
             transition: color 0.2s;
         }
         .nav-links a:hover, .nav-links a.active { color: #fff; }
         .nav-links a.accent { color: #faa307; }
+
         .hero {
             text-align: center;
-            padding: 90px 20px 70px;
+            padding: 100px 20px 80px;
+            position: relative;
+        }
+        .hero-ring {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 520px; height: 520px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(250,163,7,0.08) 0%, transparent 70%);
+            pointer-events: none;
         }
         .hero img.logo {
-            width: 80px; height: 80px;
-            border-radius: 18px;
-            margin-bottom: 28px;
+            width: 88px; height: 88px;
+            border-radius: 20px;
+            margin-bottom: 32px;
+            box-shadow: 0 0 40px rgba(250,163,7,0.35), 0 0 80px rgba(250,163,7,0.12);
         }
         .hero h1 {
-            font-size: 2.6em;
+            font-size: 2.8em;
             font-weight: 700;
             color: #fff;
             letter-spacing: -0.5px;
-            margin-bottom: 16px;
+            margin-bottom: 18px;
+            text-shadow: 0 0 30px rgba(250,163,7,0.15);
         }
         .hero p {
             font-size: 1.12em;
-            color: #888;
-            max-width: 520px;
-            margin: 0 auto 36px;
+            color: #777;
+            max-width: 480px;
+            margin: 0 auto 40px;
         }
         .download-btn {
             display: inline-block;
-            background: #faa307;
+            background: linear-gradient(135deg, #faa307 0%, #e8920a 100%);
             color: #0b0b0d;
             font-weight: 600;
             font-size: 1em;
-            padding: 13px 36px;
-            border-radius: 8px;
+            padding: 14px 40px;
+            border-radius: 10px;
             text-decoration: none;
-            transition: background 0.2s;
+            box-shadow: 0 0 24px rgba(250,163,7,0.35), 0 4px 16px rgba(0,0,0,0.4);
+            transition: box-shadow 0.3s, transform 0.15s;
         }
-        .download-btn:hover { background: #ffb833; }
-        .hero .meta {
-            margin-top: 12px;
-            font-size: 0.85em;
-            color: #555;
+        .download-btn:hover {
+            box-shadow: 0 0 40px rgba(250,163,7,0.5), 0 4px 20px rgba(0,0,0,0.5);
+            transform: translateY(-1px);
         }
+        .hero .meta { margin-top: 14px; font-size: 0.84em; color: #444; }
+
         .section {
-            max-width: 720px;
+            max-width: 700px;
             margin: 0 auto;
-            padding: 48px 20px;
+            padding: 52px 20px;
+            position: relative;
         }
         .section-label {
             color: #faa307;
-            font-size: 0.88em;
+            font-size: 0.86em;
             font-weight: 600;
             margin-bottom: 10px;
+            text-shadow: 0 0 12px rgba(250,163,7,0.4);
         }
         .section h2 {
             font-size: 1.8em;
@@ -104,138 +133,153 @@
             letter-spacing: -0.3px;
             margin-bottom: 14px;
         }
-        .section p { color: #999; margin-bottom: 12px; }
+        .section p { color: #888; margin-bottom: 12px; }
+
         .card {
-            background: #141416;
-            border: 1px solid #222;
-            border-radius: 12px;
+            background: rgba(18,18,22,0.8);
+            border: 1px solid rgba(250,163,7,0.08);
+            border-radius: 14px;
             padding: 28px;
             margin-bottom: 16px;
+            backdrop-filter: blur(8px);
+            transition: border-color 0.3s, box-shadow 0.3s;
         }
-        .card h3 {
-            color: #fff;
-            font-size: 1.05em;
-            font-weight: 600;
-            margin-bottom: 10px;
+        .card:hover {
+            border-color: rgba(250,163,7,0.2);
+            box-shadow: 0 0 20px rgba(250,163,7,0.06);
         }
+        .card h3 { color: #fff; font-size: 1.05em; font-weight: 600; margin-bottom: 10px; }
         ol, ul { padding-left: 22px; }
-        li { margin-bottom: 8px; color: #999; }
+        li { margin-bottom: 8px; color: #888; }
         code {
-            background: #1e1e22;
+            background: rgba(250,163,7,0.1);
             color: #faa307;
-            padding: 2px 7px;
-            border-radius: 4px;
-            font-size: 0.9em;
+            padding: 2px 8px;
+            border-radius: 5px;
+            font-size: 0.88em;
+            border: 1px solid rgba(250,163,7,0.15);
         }
-        a.inline { color: #faa307; text-decoration: none; }
-        a.inline:hover { text-decoration: underline; }
+        a.inline { color: #faa307; text-decoration: none; transition: text-shadow 0.2s; }
+        a.inline:hover { text-decoration: underline; text-shadow: 0 0 8px rgba(250,163,7,0.5); }
+
         .bug-item {
-            background: #141416;
-            border: 1px solid #222;
+            background: rgba(18,18,22,0.8);
+            border: 1px solid rgba(231,76,60,0.15);
             border-left: 3px solid #e74c3c;
-            padding: 14px 18px;
-            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            border-radius: 0 10px 10px 0;
             margin-bottom: 12px;
+            backdrop-filter: blur(8px);
         }
         .bug-item strong { color: #fff; }
+
         .divider {
             border: none;
-            border-top: 1px solid #1e1e22;
-            max-width: 720px;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(250,163,7,0.15), transparent);
+            max-width: 700px;
             margin: 0 auto;
         }
+
         .footer {
             text-align: center;
-            padding: 32px 20px;
-            color: #444;
+            padding: 36px 20px;
+            color: #333;
             font-size: 0.82em;
         }
     </style>
 </head>
 <body>
-    <nav class="nav">
-        <div class="nav-brand">
-            <img src="icon.png" alt="Logo">
-            <span>ELEVATEX</span>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <div class="content">
+        <nav class="nav">
+            <div class="nav-brand">
+                <img src="icon.png" alt="Logo">
+                <span>ELEVATEX</span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#" class="active">Home</a></li>
+                <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector">GitHub</a></li>
+                <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases" class="accent">Download</a></li>
+            </ul>
+        </nav>
+
+        <div class="hero">
+            <div class="hero-ring"></div>
+            <img class="logo" src="icon.png" alt="ElevateX Traffic Injector">
+            <h1>Live traffic in your sim.</h1>
+            <p>Real ElevateX flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
+            <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/download/v1/ElevateXTrafficInjector-V1.zip">Download V1</a>
+            <div class="meta">Windows &middot; 10.7 MB &middot; No Python required</div>
         </div>
-        <ul class="nav-links">
-            <li><a href="#" class="active">Home</a></li>
-            <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector">GitHub</a></li>
-            <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases" class="accent">Download</a></li>
-        </ul>
-    </nav>
 
-    <div class="hero">
-        <img class="logo" src="icon.png" alt="ElevateX Traffic Injector">
-        <h1>Live traffic in your sim.</h1>
-        <p>Real ElevateX flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
-        <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/download/v1/ElevateXTrafficInjector-V1.zip">Download V1</a>
-        <div class="meta">Windows &middot; 10.7 MB &middot; No Python required</div>
-    </div>
+        <hr class="divider">
 
-    <hr class="divider">
-
-    <div class="section">
-        <div class="section-label">What is this?</div>
-        <h2>Watch real pilots fly around you.</h2>
-        <p>This free addon pulls live ElevateX network flights and injects them into MSFS 2024 as AI aircraft. Each one gets a proper FSLTL model and airline livery, moving smoothly in real time based on actual pilot positions.</p>
-    </div>
-
-    <hr class="divider">
-
-    <div class="section">
-        <div class="section-label">Requirements</div>
-        <h2>What you need.</h2>
-        <ul>
-            <li>Microsoft Flight Simulator 2024</li>
-            <li><a class="inline" href="https://github.com/FSLTL/fsltl-traffic-base">FSLTL Traffic Base</a> installed in your Community folder</li>
-        </ul>
-    </div>
-
-    <hr class="divider">
-
-    <div class="section">
-        <div class="section-label">Install</div>
-        <h2>Up and running in a minute.</h2>
-        <div class="card">
-            <ol>
-                <li>Download the zip above</li>
-                <li>Extract it anywhere</li>
-                <li>Start MSFS 2024 and load your flight</li>
-                <li>Run <code>ElevateXTrafficInjector.exe</code> as admin</li>
-                <li>Enter your ElevateX username (optional &mdash; excludes your own flights)</li>
-                <li>Press START</li>
-            </ol>
+        <div class="section">
+            <div class="section-label">What is this?</div>
+            <h2>Watch real pilots fly around you.</h2>
+            <p>This free addon pulls live ElevateX network flights and injects them into MSFS 2024 as AI aircraft. Each one gets a proper FSLTL model and airline livery, moving smoothly in real time based on actual pilot positions.</p>
         </div>
-    </div>
 
-    <hr class="divider">
+        <hr class="divider">
 
-    <div class="section">
-        <div class="section-label">How it works</div>
-        <h2>Built on the live feed.</h2>
-        <p>Every 12 seconds the injector downloads the ElevateX live feed, picks the flights nearest to you, matches each to an FSLTL model and livery, and spawns them via SimConnect. Between feed updates it interpolates smooth motion so aircraft glide continuously instead of teleporting.</p>
-    </div>
+        <div class="section">
+            <div class="section-label">Requirements</div>
+            <h2>What you need.</h2>
+            <ul>
+                <li>Microsoft Flight Simulator 2024</li>
+                <li><a class="inline" href="https://github.com/FSLTL/fsltl-traffic-base">FSLTL Traffic Base</a> installed in your Community folder</li>
+            </ul>
+        </div>
 
-    <hr class="divider">
+        <hr class="divider">
 
-    <div class="section">
-        <div class="section-label">Known bugs</div>
-        <h2>What we're fixing.</h2>
-        <div class="bug-item"><strong>Takeoff surge</strong> &mdash; aircraft on the runway can suddenly accelerate then settle repeatedly instead of rolling smoothly.</div>
-        <div class="bug-item"><strong>Pitch attitude</strong> &mdash; nose-up/down during climbs and descents is not always correct yet.</div>
-    </div>
+        <div class="section">
+            <div class="section-label">Install</div>
+            <h2>Up and running in a minute.</h2>
+            <div class="card">
+                <ol>
+                    <li>Download the zip above</li>
+                    <li>Extract it anywhere</li>
+                    <li>Start MSFS 2024 and load your flight</li>
+                    <li>Run <code>ElevateXTrafficInjector.exe</code> as admin</li>
+                    <li>Enter your ElevateX username (optional &mdash; excludes your own flights)</li>
+                    <li>Press START</li>
+                </ol>
+            </div>
+        </div>
 
-    <hr class="divider">
+        <hr class="divider">
 
-    <div class="section">
-        <div class="section-label">Source</div>
-        <h2>Open on GitHub.</h2>
-        <p><a class="inline" href="https://github.com/FreedomStrider39/elevatex-traffic-injector">github.com/FreedomStrider39/elevatex-traffic-injector</a></p>
-    </div>
+        <div class="section">
+            <div class="section-label">How it works</div>
+            <h2>Built on the live feed.</h2>
+            <p>Every 12 seconds the injector downloads the ElevateX live feed, picks the flights nearest to you, matches each to an FSLTL model and livery, and spawns them via SimConnect. Between feed updates it interpolates smooth motion so aircraft glide continuously instead of teleporting.</p>
+        </div>
 
-    <div class="footer">
-        Unofficial project &middot; Not affiliated with ElevateX &middot; Freeware
+        <hr class="divider">
+
+        <div class="section">
+            <div class="section-label">Known bugs</div>
+            <h2>What we're fixing.</h2>
+            <div class="bug-item"><strong>Takeoff surge</strong> &mdash; aircraft on the runway can suddenly accelerate then settle repeatedly instead of rolling smoothly.</div>
+            <div class="bug-item"><strong>Pitch attitude</strong> &mdash; nose-up/down during climbs and descents is not always correct yet.</div>
+        </div>
+
+        <hr class="divider">
+
+        <div class="section">
+            <div class="section-label">Source</div>
+            <h2>Open on GitHub.</h2>
+            <p><a class="inline" href="https://github.com/FreedomStrider39/elevatex-traffic-injector">github.com/FreedomStrider39/elevatex-traffic-injector</a></p>
+        </div>
+
+        <div class="footer">
+            Unofficial project &middot; Not affiliated with ElevateX &middot; Freeware
+        </div>
     </div>
 </body>
 </html>
