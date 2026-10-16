@@ -83,13 +83,13 @@ def _save_username(name: str) -> None:
 
 
 # ── Palette (ElevateX brand: dark slate + elvtx-yellow) ──────────────────────
-BG       = "#101828"  # site background
-SURFACE  = "#1a2334"  # card surface
-HEADER_BG = "#141c2b" # header band
-BORDER   = "#2b3648"
+BG       = "#060608"  # site background
+SURFACE  = "#141416"  # card surface
+HEADER_BG = "#0c0c0e" # header band
+BORDER   = "#222222"
 ACCENT   = "#faa307"  # --color-elvtx-yellow (brand)
 ACCENT_HOVER = "#ffae1a"
-ACCENT_FG    = "#101828"  # dark text on yellow
+ACCENT_FG    = "#060608"  # dark text on yellow
 GREEN    = "#3fb950"
 RED      = "#f87171"
 TEXT     = "#f4f6f9"
@@ -220,14 +220,14 @@ class Dashboard:
         # Buttons — START is brand yellow, STOP is a quiet dark-red
         s.configure("Start.TButton", background=ACCENT, foreground=ACCENT_FG,
                     font=("Segoe UI", 10, "bold"), padding=(0, 8))
-        s.map("Start.TButton", background=[("active", ACCENT_HOVER), ("disabled", "#232d42")],
+        s.map("Start.TButton", background=[("active", ACCENT_HOVER), ("disabled", "#1e1e22")],
               foreground=[("disabled", MUTED)])
         s.configure("Stop.TButton", background="#3a232c", foreground=RED,
                     font=("Segoe UI", 10, "bold"), padding=(0, 8))
-        s.map("Stop.TButton", background=[("active", "#4d2c37"), ("disabled", "#232d42")],
+        s.map("Stop.TButton", background=[("active", "#4d2c37"), ("disabled", "#1e1e22")],
               foreground=[("disabled", MUTED)])
         # Small ghost button (Clear log, folder picker)
-        s.configure("Ghost.TButton", background="#232d42", foreground=TEXT,
+        s.configure("Ghost.TButton", background="#1e1e22", foreground=TEXT,
                     font=("Segoe UI", 9), padding=(10, 4))
         s.map("Ghost.TButton", background=[("active", "#2e3a52")],
               foreground=[("active", TEXT)])
@@ -236,7 +236,7 @@ class Dashboard:
         s.configure("Treeview", background=SURFACE, fieldbackground=SURFACE,
                     foreground=TEXT, font=("Consolas", 10), rowheight=26,
                     borderwidth=0)
-        s.configure("Treeview.Heading", background="#141c2b", foreground=MUTED,
+        s.configure("Treeview.Heading", background="#141416", foreground=MUTED,
                     font=("Segoe UI", 9, "bold"), relief="flat")
         s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", ACCENT_FG)])
         s.map("Treeview.Heading", background=[("active", "#1e2940")])
@@ -286,7 +286,7 @@ class Dashboard:
         self.status_var = tk.StringVar(value="STOPPED")
         self.status_lbl = tk.Label(inner, textvariable=self.status_var,
                                    font=("Segoe UI", 10, "bold"),
-                                   bg="#232d42", fg=RED, padx=12, pady=3)
+                                   bg="#1e1e22", fg=RED, padx=12, pady=3)
         self.status_lbl.pack(side="right")
 
     # ── stats cards ─────────────────────────────────────────────────────────
@@ -773,6 +773,16 @@ class Dashboard:
 # ── entry point ──────────────────────────────────────────────────────────────
 def main():
     root = tk.Tk()
+    try:
+        _icon_file = os.path.join(
+            getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))),
+            "icon.png")
+        if os.path.exists(_icon_file):
+            _app_icon = tk.PhotoImage(file=_icon_file)
+            root.iconphoto(True, _app_icon)
+            root._app_icon = _app_icon  # keep reference so Tk doesn't GC it
+    except Exception:
+        pass
     Dashboard(root)
     root.mainloop()
 
