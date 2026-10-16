@@ -118,6 +118,32 @@
             box-shadow: 0 0 40px rgba(250,163,7,0.5), 0 4px 20px rgba(0,0,0,0.5);
             transform: translateY(-1px);
         }
+        .download-btn.disabled {
+            background: #1a1a1d;
+            color: #666;
+            box-shadow: none;
+            border: 1px solid #2a2a2e;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        .maint-banner {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            background: rgba(231,76,60,0.1);
+            border-bottom: 1px solid rgba(231,76,60,0.35);
+            color: #ff6b5e;
+            font-weight: 600;
+            font-size: 0.9em;
+            letter-spacing: 0.3px;
+            padding: 11px 16px;
+            text-align: center;
+        }
+        .maint-banner .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #e74c3c; box-shadow: 0 0 8px #e74c3c;
+        }
         .hero .meta { margin-top: 14px; font-size: 0.84em; color: #444; }
 
         .section {
@@ -289,6 +315,7 @@
     <div class="orb orb-3"></div>
 
     <div class="content">
+        <div class="maint-banner"><span class="dot"></span> UNDER MAINTENANCE &mdash; downloads are paused while I fix aircraft motion and ground handling. Check back soon.</div>
         <nav class="nav">
             <div class="nav-brand">
                 <img src="icon.png" alt="Logo">
@@ -306,8 +333,8 @@
             <img class="logo" src="icon.png" alt="ElevateX Traffic Injector">
             <h1><span class="fade-line" style="animation-delay:0.2s;">Real pilots.</span><br><span class="live fade-line" style="animation-delay:0.6s;">Real traffic.</span><br><span class="fade-line" style="animation-delay:1.0s;">In your sim.</span></h1>
             <p><strong style="color:#ccc;">From your ELEVATEX flight tracker to your sim.</strong> Real live flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
-            <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/latest/download/ElevateXTrafficInjector.zip">Download</a>
-            <div class="meta" id="dl-meta">Windows &middot; &hellip; &middot; No Python required</div>
+            <a class="download-btn disabled" aria-disabled="true">Download unavailable</a>
+            <div class="meta">Downloads paused &mdash; fixing aircraft motion &amp; ground handling. Check back soon.</div>
         </div>
 
         <hr class="divider">
