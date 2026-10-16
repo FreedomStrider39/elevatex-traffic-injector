@@ -104,6 +104,11 @@ class TrafficFlight:
 FEED_POLL_INTERVAL_S = 12.0
 TRACK_INTERVAL_S = 0.033  # ~30 Hz target; smoothing is dt-based (frame-rate independent)
 
+# Max heading change per second we allow when easing the nose toward the
+# (noisy) feed heading. Kills left-right jitter during taxi without making
+# turns look sluggish. PSXT/LiveTraffic smooth heading the same way.
+HDG_RATE_LIMIT_DPS = 18.0
+
 # Nearest-N selection tuning (stable, no boundary flicker).
 # Margins scale with the user's radius so a small radius stays strict
 # while the default 40 NM keeps full anti-pop protection.
@@ -1796,6 +1801,22 @@ class LiveTrafficInjector:
             else:
                 active.smooth_bank += ((bank_deg - active.smooth_bank)
                                        * _smooth_factor(dt, 0.80))
+
+            # Rate-limit the heading so noisy feed headings and the step at
+            # each sample don't show up as a wiggling nose. PSXT 16.5 calls
+            # this out explicitly: "smoother heading corrections during taxi,
+            # reducing unnecessary left-right corrections". Slew on the short
+            # way round and cap the turn rate so taxi turns stay coordinated
+            # instead of snapping.
+            if active.smooth_hdg is None:
+                active.smooth_hdg = heading
+            else:
+                dh = ((heading - active.smooth_hdg + 180.0) % 360.0) - 180.0
+                lim = HDG_RATE_LIMIT_DPS * dt
+                step = dh * _smooth_factor(dt, 0.5)
+                active.smooth_hdg = (active.smooth_hdg
+                                     + max(-lim, min(lim, step))) % 360.0
+            heading = active.smooth_hdg
 
             # Send position update
             try:

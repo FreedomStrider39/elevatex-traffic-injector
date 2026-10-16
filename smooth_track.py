@@ -173,24 +173,28 @@ def _interp(a: Sample, b: Sample, u: float, seg: float, elevs=()) -> Pose:
     m1x, m1y = tangent(b)
 
     # TIMING along that path is a separate monotone speed profile. We model
-    # the speed as changing LINEARLY from the previous sample's ground speed
-    # to this sample's ground speed over the segment, then integrate it to get
-    # the distance fraction w(u). This is a constant-acceleration profile:
-    # it accelerates/decays smoothly and never "crawls then suddenly rushes"
-    # the way an S-shaped Hermite did on take-off. Because va is exactly the
-    # speed the previous segment ended at (the same reported gs at the shared
-    # sample), speed stays continuous across segments.
+    # speed s(tau) as a *guarded* cubic Hermite in tau from the previous
+    # sample's ground speed to this sample's ground speed, with zero end
+    # slopes (ease-in/ease-out). Because s(tau)=va+(vb-va)(3tau^2-2tau^3) has
+    # s'(tau)=6tau(1-tau) >= 0, it is monotone and never overshoots or
+    # reverses -- this is exactly PSXT's "guarded Hermite speed interpolation"
+    # for take-off/landing rolls. Integrating s to get the distance fraction
+    # gives w(u)=[va*u + (vb-va)(u^3 - u^4/2)] / mean, which accelerates and
+    # decays gently instead of the old S-shaped distance profile that crawled
+    # then suddenly rushed on take-off. va is the speed the previous segment
+    # ended at (same reported gs at the shared sample), so speed is continuous
+    # across segments.
     avg = chord / seg                                  # NM/s needed on average
     if chord < 0.002:
         w = u                                          # parked: nothing to time
     else:
         va = min(max(a.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
         vb = min(max(b.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
-        denom = (va + vb) * 0.5                        # mean speed
+        denom = (va + vb) * 0.5                        # mean speed (= integral of s over 0..1)
         if denom <= 1e-9:
             w = u
         else:
-            w = (va * u + (vb - va) * u * u * 0.5) / denom
+            w = (va * u + (vb - va) * (u * u * u - 0.5 * u * u * u * u)) / denom
         w = min(max(w, 0.0), 1.0)
     w2 = w * w
     w3 = w2 * w
@@ -298,10 +302,15 @@ class Track:
 
             if len(q) == 1:
                 dtp = max(-60.0, min(P - q[0].t, self.max_hold_s))
-                raw = _project(q[0], dtp)
+                raw = _pose_of(q[0]) if q[0].gs < GROUND_HOLD_KT else _project(q[0], dtp)
                 extrap_now = P > q[0].t
             elif P >= q[-1].t:                       # starved: run on from newest sample
-                raw = _project(q[-1], min(P - q[-1].t, self.max_hold_s))
+                if q[-1].gs < GROUND_HOLD_KT:
+                    # Ground/taxi with no fresh data: hold the last known spot
+                    # rather than dead-reckon off the taxiway (PSXT does this).
+                    raw = _pose_of(q[-1])
+                else:
+                    raw = _project(q[-1], min(P - q[-1].t, self.max_hold_s))
                 extrap_now = True
             elif P <= q[0].t:                        # startup: just before first sample
                 raw = _project(q[0], max(P - q[0].t, -60.0))
@@ -328,6 +337,7 @@ class Track:
 
 
 # ---- attitude / vertical profile ---------------------------------------------
+GROUND_HOLD_KT = 60.0        # below this speed a gap means "hold position", not dead-reckon
 GROUND_AGL_FT = 40.0         # below this (gs >= 50) the aircraft is on the runway
 ROTATE_GS_KT = 110.0         # earliest speed at which the nose may rotate
 ROTATE_PITCH_DEG = 8.0       # pitch reached on the runway before lift-off
