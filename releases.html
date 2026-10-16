@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Releases - ElevateX Live Traffic Injector</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            background: #060608;
+            color: #c8c8cc;
+            line-height: 1.65;
+            overflow-x: hidden;
+        }
+
+        /* ambient glow orbs */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.18;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .orb-1 { width: 600px; height: 600px; background: #faa307; top: -200px; left: -150px; }
+        .orb-2 { width: 500px; height: 500px; background: #c77800; bottom: -180px; right: -120px; opacity: 0.12; }
+        .orb-3 { width: 350px; height: 350px; background: #ffcc44; top: 40%; left: 55%; opacity: 0.07; }
+
+        .content { position: relative; z-index: 1; }
+
+        .nav {
+            background: rgba(12,12,14,0.85);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid rgba(250,163,7,0.12);
+            padding: 0 40px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .nav-brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+        .nav-brand img { height: 30px; filter: drop-shadow(0 0 8px rgba(250,163,7,0.5)); }
+        .nav-brand span {
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.5px;
+        }
+        .nav-links { display: flex; gap: 28px; list-style: none; }
+        .nav-links a {
+            color: #777;
+            text-decoration: none;
+            font-size: 0.9em;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover, .nav-links a.active { color: #fff; }
+        .nav-links a.accent { color: #faa307; }
+
+        .section {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 52px 20px;
+            position: relative;
+        }
+        .section-label {
+            color: #faa307;
+            font-size: 0.86em;
+            font-weight: 600;
+            margin-bottom: 10px;
+            text-shadow: 0 0 12px rgba(250,163,7,0.4);
+        }
+        .section h1 {
+            font-size: 2.2em;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: -0.5px;
+            margin-bottom: 14px;
+        }
+        .section p { color: #888; margin-bottom: 24px; }
+
+        .release-item {
+            background: rgba(18,18,22,0.8);
+            border: 1px solid rgba(250,163,7,0.08);
+            border-radius: 14px;
+            padding: 24px;
+            margin-bottom: 18px;
+            backdrop-filter: blur(8px);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .release-item:hover {
+            border-color: rgba(250,163,7,0.2);
+            box-shadow: 0 0 20px rgba(250,163,7,0.06);
+        }
+        .release-head {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+        .release-tag {
+            background: rgba(250,163,7,0.12);
+            color: #faa307;
+            border: 1px solid rgba(250,163,7,0.25);
+            border-radius: 6px;
+            padding: 2px 9px;
+            font-size: 0.82em;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        .release-name { color: #fff; font-weight: 700; font-size: 1.08em; }
+        .release-date { color: #555; font-size: 0.82em; margin-left: auto; }
+        .release-body ul { margin: 0; padding-left: 20px; }
+        .release-body li { color: #888; margin-bottom: 8px; }
+        .release-body li strong { color: #ccc; }
+        code {
+            background: rgba(250,163,7,0.1);
+            color: #faa307;
+            padding: 2px 8px;
+            border-radius: 5px;
+            font-size: 0.88em;
+            border: 1px solid rgba(250,163,7,0.15);
+        }
+
+        .release-loading { color: #555; font-size: 0.9em; padding: 12px 2px; }
+        .release-inop {
+            background: rgba(231,76,60,0.08);
+            border: 1px solid rgba(231,76,60,0.4);
+            border-left: 3px solid #e74c3c;
+            color: #ff6b5e;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            padding: 16px 20px;
+            border-radius: 0 10px 10px 0;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 48px 20px 36px;
+            color: #333;
+            font-size: 0.82em;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        .nav {
+            opacity: 0;
+            animation: fadeIn 0.5s ease 0.1s forwards;
+        }
+    </style>
+</head>
+<body>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <div class="content">
+        <nav class="nav">
+            <a href="index.html" class="nav-brand">
+                <img src="icon.png" alt="Logo">
+                <span>ELEVATEX</span> <span style="color:#777;font-weight:400;">Traffic Injector</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="releases.html" class="active">Releases</a></li>
+                <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector">GitHub</a></li>
+            </ul>
+        </nav>
+
+        <div class="section">
+            <div class="section-label">Changelog</div>
+            <h1>Releases &amp; Updates</h1>
+            <p>Every version update and the fixes it includes. Automatically synced with GitHub releases.</p>
+            <div id="releases-list">
+                <div class="release-loading">Loading releases&hellip;</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            Unofficial project &middot; Not affiliated with ELEVATEX &middot; Freeware
+        </div>
+    </div>
+
+    <script>
+    function extractFixes(body) {
+        const lines = (body || '').split('\n');
+        let out = [], inSection = false;
+        for (const raw of lines) {
+            const l = raw.trim();
+            if (/^#{1,6}\s/.test(l)) { inSection = /what'?s new/i.test(l); continue; }
+            if (inSection && l.startsWith('- ')) out.push(l.slice(2));
+        }
+        if (!out.length) {
+            for (const raw of lines) {
+                const l = raw.trim();
+                if (/^#{1,6}\s/.test(l)) break;
+                if (l.startsWith('- ')) out.push(l.slice(2));
+            }
+        }
+        return out.map(t => t
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>')
+            .replace(/`(.+?)`/g, '<code>$1</code>')
+            .replace(/\[(.+?)\]\([^)]*\)/g, '$1'));
+    }
+    function showReleasesInop() {
+        const el = document.getElementById('releases-list');
+        if (el) el.innerHTML = '<div class="release-inop">SERVICE CURRENTLY INOP</div>';
+    }
+    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases')
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(list => {
+            if (!Array.isArray(list)) { showReleasesInop(); return; }
+            const pub = list.filter(r => !r.draft && !r.prerelease);
+            if (!pub.length) { showReleasesInop(); return; }
+            const el = document.getElementById('releases-list');
+            if (!el) return;
+            el.innerHTML = pub.map(r => {
+                const tag = r.tag_name || '';
+                let name = r.name || '';
+                name = name.replace(new RegExp('^' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[-:]\\s*'), '');
+                const date = r.published_at
+                    ? new Date(r.published_at).toLocaleDateString(undefined,
+                        { year: 'numeric', month: 'short', day: 'numeric' })
+                    : '';
+                const fixes = extractFixes(r.body);
+                const body = fixes.length
+                    ? '<ul>' + fixes.map(f => '<li>' + f + '</li>').join('') + '</ul>'
+                    : '';
+                return '<div class="release-item"><div class="release-head">'
+                    + '<span class="release-tag">' + tag + '</span>'
+                    + (name ? '<span class="release-name">' + name + '</span>' : '')
+                    + '<span class="release-date">' + date + '</span>'
+                    + '</div><div class="release-body">' + body + '</div></div>';
+            }).join('');
+        })
+        .catch(showReleasesInop);
+    </script>
+</body>
+</html>

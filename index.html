@@ -321,7 +321,8 @@
                 <span>ELEVATEX</span> <span style="color:#777;font-weight:400;">Traffic Injector</span>
             </div>
             <ul class="nav-links">
-                <li><a href="#" class="active">Home</a></li>
+                <li><a href="index.html" class="active">Home</a></li>
+                <li><a href="releases.html">Releases</a></li>
                 <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector">GitHub</a></li>
             </ul>
         </nav>
@@ -383,17 +384,6 @@
 
         <hr class="divider">
 
-        <div class="section" id="releases">
-            <div class="section-label">Releases</div>
-            <h2>What's new.</h2>
-            <p>Every update and the fixes it includes. This list stays automatically in sync with the project's releases.</p>
-            <div id="releases-list">
-                <div class="release-loading">Loading releases&hellip;</div>
-            </div>
-        </div>
-
-        <hr class="divider">
-
         <div class="section">
             <div class="section-label">Known bugs</div>
             <h2>What I'm fixing.</h2>
@@ -424,7 +414,7 @@
 
     <script>
     // Auto-update file size from the latest GitHub release
-    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases/latest')
+        fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases/latest')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
             if (!data || !data.assets) return;
@@ -436,63 +426,6 @@
             }
         })
         .catch(() => {});
-    </script>
-
-    <script>
-    // Auto-sync the Releases list from GitHub (versions + fixes, no links)
-    function extractFixes(body) {
-        const lines = (body || '').split('\n');
-        let out = [], inSection = false;
-        for (const raw of lines) {
-            const l = raw.trim();
-            if (/^#{1,6}\s/.test(l)) { inSection = /what'?s new/i.test(l); continue; }
-            if (inSection && l.startsWith('- ')) out.push(l.slice(2));
-        }
-        if (!out.length) {                       // no "What's new" heading -> leading bullets
-            for (const raw of lines) {
-                const l = raw.trim();
-                if (/^#{1,6}\s/.test(l)) break;
-                if (l.startsWith('- ')) out.push(l.slice(2));
-            }
-        }
-        return out.map(t => t
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/`(.+?)`/g, '<code>$1</code>')
-            .replace(/\[(.+?)\]\([^)]*\)/g, '$1'));
-    }
-    function showReleasesInop() {
-        const el = document.getElementById('releases-list');
-        if (el) el.innerHTML = '<div class="release-inop">SERVICE CURRENTLY INOP</div>';
-    }
-    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases')
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(list => {
-            if (!Array.isArray(list)) { showReleasesInop(); return; }
-            const pub = list.filter(r => !r.draft && !r.prerelease);
-            if (!pub.length) { showReleasesInop(); return; }
-            const el = document.getElementById('releases-list');
-            if (!el) return;
-            el.innerHTML = pub.map(r => {
-                const tag = r.tag_name || '';
-                let name = r.name || '';
-                name = name.replace(new RegExp('^' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[-:]\\s*'), '');
-                const date = r.published_at
-                    ? new Date(r.published_at).toLocaleDateString(undefined,
-                        { year: 'numeric', month: 'short', day: 'numeric' })
-                    : '';
-                const fixes = extractFixes(r.body);
-                const body = fixes.length
-                    ? '<ul>' + fixes.map(f => '<li>' + f + '</li>').join('') + '</ul>'
-                    : '';
-                return '<div class="release-item"><div class="release-head">'
-                    + '<span class="release-tag">' + tag + '</span>'
-                    + (name ? '<span class="release-name">' + name + '</span>' : '')
-                    + '<span class="release-date">' + date + '</span>'
-                    + '</div><div class="release-body">' + body + '</div></div>';
-            }).join('');
-        })
-        .catch(showReleasesInop);
     </script>
 </body>
 </html>
