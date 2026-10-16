@@ -932,7 +932,7 @@ class _DispatchSimConnect(PySimConnect):
     def __init__(self, *args, **kwargs):
         self.assigned_objects: Dict[int, int] = {}  # request_id -> object_id
         self.lock = threading.Lock()
-        self.DEFINITION_POS_GROUND = None  # lat/lon/heading only (for on-ground)
+        self.DEFINITION_POS = None  # lat/lon/alt/heading/pitch/bank (all aircraft)
         super().__init__(*args, **kwargs)
 
     def handle_exception_event(self, exc):
@@ -1078,22 +1078,29 @@ class ElevateXSimConnect:
         return req_id
 
     def _get_freeze_events(self, freeze_altitude: bool = True):
-        """Map the FREEZE key events once and cache their client event IDs."""
+        """Map the FREEZE events once and cache their client event IDs.
+
+        We freeze POSITION (lat/lon) and ALTITUDE so the sim's own physics/AI
+        never fights our writes -- this is what stops aircraft sinking,
+        bouncing and jittering.
+
+        ATTITUDE is deliberately NOT frozen. In MSFS, FREEZE_ATTITUDE_SET also
+        blocks PLANE PITCH/BANK writes, which flattened the nose. We instead
+        write pitch/bank every frame, which overrides any attitude drift.
+        """
         if self._freeze_events is None:
             self._freeze_events = {}
         key = bool(freeze_altitude)
         if key not in self._freeze_events:
-            names = [b"FREEZE_LATITUDE_LONGITUDE_SET", b"FREEZE_ATTITUDE_SET"]
-            if freeze_altitude:
-                names.append(b"FREEZE_ALTITUDE_SET")
+            names = [b"FREEZE_LATITUDE_LONGITUDE_SET", b"FREEZE_ALTITUDE_SET"]
             self._freeze_events[key] = [self.sm.map_to_sim_event(n) for n in names]
         return self._freeze_events[key]
 
     def freeze_object(self, object_id: int, freeze_altitude: bool = True) -> bool:
-        """Freeze an AI object so MSFS physics/AI brain stops moving it.
+        """Freeze an AI object's lat/lon + altitude so MSFS stops moving it.
 
-        Pairs with coordinate writes (PLANE LATITUDE etc). Altitude freeze is
-        skipped for on-ground aircraft so terrain keeps the gear planted.
+        Pairs with coordinate writes (PLANE LATITUDE etc). Attitude is left
+        free so our pitch/bank writes stick (see _get_freeze_events).
         """
         ok = True
         for ev in self._get_freeze_events(freeze_altitude):
@@ -1115,73 +1122,47 @@ class ElevateXSimConnect:
     def update_position(self, object_id: int, lat: float, lon: float, alt_ft: float, heading: float, speed_kt: float, on_ground: bool = False, pitch_deg: float = 0.0, bank_deg: float = 0.0):
         """Update position/heading/attitude of an active ElevateX aircraft.
 
-        Uses PLANE LATITUDE / LONGITUDE / HEADING / PITCH / BANK data
-        definitions (continuous coordinate writes) instead of "Initial
-        Position", which resets flight dynamics and causes stutter/bounce.
+        Uses continuous coordinate writes (PLANE LATITUDE / LONGITUDE /
+        ALTITUDE / HEADING / PITCH / BANK) rather than "Initial Position",
+        which reloads scenery and resets flight dynamics.
 
-        Pitch/bank give the aircraft a realistic nose attitude on
-        climbs/descents and banked turns (vPilot/xPilot style).
-
-        For on-ground aircraft, altitude/attitude are NOT written so
-        MSFS terrain keeps the gear planted (writing them fights the
-        contact points and makes the aircraft bounce).
+        We write the SAME six fields for every aircraft (ground and airborne).
+        Because freeze_object() freezes lat/lon + altitude, the sim can no
+        longer fight these writes (no sinking/bouncing/jitter), and because
+        attitude is not frozen the pitch/bank actually stick -- giving a
+        realistic nose-up on climbs and bank on turns (vPilot/xPilot style).
+        On-ground aircraft are passed an altitude snapped to field elevation.
         """
         heading_rad = math.radians(heading % 360.0)
 
-        if on_ground:
-            # Ground: lat/lon/heading only - let terrain set the rest
-            if self.sm.DEFINITION_POS_GROUND is None:
-                self.sm.DEFINITION_POS_GROUND = self.sm.new_def_id()
-                for var, unit in [
-                    (b"PLANE LATITUDE", b"Degrees"),
-                    (b"PLANE LONGITUDE", b"Degrees"),
-                    (b"PLANE HEADING DEGREES TRUE", b"Radians"),
-                ]:
-                    self.sm.dll.AddToDataDefinition(
-                        self.sm.hSimConnect,
-                        self.sm.DEFINITION_POS_GROUND.value,
-                        var,
-                        unit,
-                        SIMCONNECT_DATATYPE.SIMCONNECT_DATATYPE_FLOAT64,
-                        0,
-                        SIMCONNECT_UNUSED,
-                    )
-            def_id = self.sm.DEFINITION_POS_GROUND.value
-            data = (c_double * 3)(lat, lon, heading_rad)
-            if not getattr(self, "_ground_def_logged", False):
-                print(f"[SimConnect] Ground write definition ready (id={def_id}).")
-                self._ground_def_logged = True
-        else:
-            # Airborne: lat/lon/alt/heading + pitch/bank attitude
-            if self.sm.DEFINITION_POS is None:
-                self.sm.DEFINITION_POS = self.sm.new_def_id()
-                for var, unit in [
-                    (b"PLANE LATITUDE", b"Degrees"),
-                    (b"PLANE LONGITUDE", b"Degrees"),
-                    (b"PLANE ALTITUDE", b"Feet"),
-                    (b"PLANE HEADING DEGREES TRUE", b"Radians"),
-                    (b"PLANE PITCH DEGREES", b"Radians"),
-                    (b"PLANE BANK DEGREES", b"Radians"),
-                ]:
-                    self.sm.dll.AddToDataDefinition(
-                        self.sm.hSimConnect,
-                        self.sm.DEFINITION_POS.value,
-                        var,
-                        unit,
-                        SIMCONNECT_DATATYPE.SIMCONNECT_DATATYPE_FLOAT64,
-                        0,
-                        SIMCONNECT_UNUSED,
-                    )
-            def_id = self.sm.DEFINITION_POS.value
-            data = (c_double * 6)(
-                lat, lon, alt_ft, heading_rad,
-                # MSFS convention: +PITCH = nose DOWN, +BANK = LEFT wing down.
-                # Our values are natural (+pitch up, +bank right) -> negate.
-                -math.radians(pitch_deg), -math.radians(bank_deg),
-            )
-            if not getattr(self, "_air_def_logged", False):
-                print(f"[SimConnect] Airborne write definition ready (id={def_id}, 6 fields).")
-                self._air_def_logged = True
+        if self.sm.DEFINITION_POS is None:
+            self.sm.DEFINITION_POS = self.sm.new_def_id()
+            for var, unit in [
+                (b"PLANE LATITUDE", b"Degrees"),
+                (b"PLANE LONGITUDE", b"Degrees"),
+                (b"PLANE ALTITUDE", b"Feet"),
+                (b"PLANE HEADING DEGREES TRUE", b"Radians"),
+                (b"PLANE PITCH DEGREES", b"Radians"),
+                (b"PLANE BANK DEGREES", b"Radians"),
+            ]:
+                self.sm.dll.AddToDataDefinition(
+                    self.sm.hSimConnect,
+                    self.sm.DEFINITION_POS.value,
+                    var,
+                    unit,
+                    SIMCONNECT_DATATYPE.SIMCONNECT_DATATYPE_FLOAT64,
+                    0,
+                    SIMCONNECT_UNUSED,
+                )
+            print(f"[SimConnect] Position/attitude definition ready "
+                  f"(id={self.sm.DEFINITION_POS.value}, 6 fields).")
+        def_id = self.sm.DEFINITION_POS.value
+        data = (c_double * 6)(
+            lat, lon, alt_ft, heading_rad,
+            # MSFS convention: +PITCH = nose DOWN, +BANK = LEFT wing down.
+            # Our values are natural (+pitch up, +bank right) -> negate.
+            -math.radians(pitch_deg), -math.radians(bank_deg),
+        )
 
         hr = self.sm.dll.SetDataOnSimObject(
             self.sm.hSimConnect,
@@ -1793,11 +1774,13 @@ class LiveTrafficInjector:
             if not on_ground:
                 alt_ft = alt_model   # flare / smoothed profile near the ground
 
-            # Freeze the object once so the AI brain stops fighting our writes.
-            # Coordinate writes only (PLANE LATITUDE etc), never Initial Position.
-            # Don't freeze altitude for on-ground aircraft (terrain holds the gear).
+            # Freeze the object once so the AI brain/physics stops fighting our
+            # writes. Coordinate writes only (PLANE LATITUDE etc), never Initial
+            # Position. We freeze lat/lon AND altitude for every aircraft (ground
+            # and air) so it can't sink, bounce or jitter; attitude is left free
+            # so our pitch/bank writes stick.
             if not active.frozen:
-                active.frozen = self.sim.freeze_object(active.object_id, freeze_altitude=not on_ground)
+                active.frozen = self.sim.freeze_object(active.object_id)
 
             # --- No position smoothing: the pose is already smooth (it
             # moves along the curve, never jumps). Only attitude keeps

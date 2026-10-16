@@ -172,23 +172,26 @@ def _interp(a: Sample, b: Sample, u: float, seg: float, elevs=()) -> Pose:
     m0x, m0y = tangent(a)
     m1x, m1y = tangent(b)
 
-    # TIMING along that path is a separate monotone speed profile: it covers
-    # the chord exactly in `seg` seconds and its speed is continuous at every
-    # sample (no more crawl/surge between samples, no step from slow to fast
-    # during take-off acceleration).
+    # TIMING along that path is a separate monotone speed profile. We model
+    # the speed as changing LINEARLY from the previous sample's ground speed
+    # to this sample's ground speed over the segment, then integrate it to get
+    # the distance fraction w(u). This is a constant-acceleration profile:
+    # it accelerates/decays smoothly and never "crawls then suddenly rushes"
+    # the way an S-shaped Hermite did on take-off. Because va is exactly the
+    # speed the previous segment ended at (the same reported gs at the shared
+    # sample), speed stays continuous across segments.
     avg = chord / seg                                  # NM/s needed on average
     if chord < 0.002:
         w = u                                          # parked: nothing to time
     else:
-        # Start speed = the speed the previous segment ENDED at (continuity by
-        # construction); end speed = reported gs held near the average.
-        va = a.v_play / 3600.0 if a.v_play >= 0.0 else \
-            min(max(a.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
+        va = min(max(a.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
         vb = min(max(b.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
-        sa = min(va / avg, 3.0)
-        sb = min(vb / avg, 3.0)
-        b.v_play = sb * avg * 3600.0                   # carried into the next segment
-        w, _ = _hermite(0.0, 1.0, sa, sb, u)
+        denom = (va + vb) * 0.5                        # mean speed
+        if denom <= 1e-9:
+            w = u
+        else:
+            w = (va * u + (vb - va) * u * u * 0.5) / denom
+        w = min(max(w, 0.0), 1.0)
     w2 = w * w
     w3 = w2 * w
     h10 = w3 - 2 * w2 + w
