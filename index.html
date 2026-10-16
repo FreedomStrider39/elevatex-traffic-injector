@@ -180,6 +180,42 @@
         }
         .bug-item strong { color: #fff; }
 
+        .release-item {
+            background: rgba(18,18,22,0.8);
+            border: 1px solid rgba(250,163,7,0.08);
+            border-radius: 14px;
+            padding: 20px 24px;
+            margin-bottom: 14px;
+            backdrop-filter: blur(8px);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .release-item:hover {
+            border-color: rgba(250,163,7,0.2);
+            box-shadow: 0 0 20px rgba(250,163,7,0.06);
+        }
+        .release-head {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .release-tag {
+            background: rgba(250,163,7,0.12);
+            color: #faa307;
+            border: 1px solid rgba(250,163,7,0.25);
+            border-radius: 6px;
+            padding: 2px 9px;
+            font-size: 0.8em;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        .release-name { color: #fff; font-weight: 700; font-size: 1.02em; }
+        .release-date { color: #555; font-size: 0.82em; margin-left: auto; }
+        .release-body ul { margin: 0; padding-left: 20px; }
+        .release-body li { color: #888; margin-bottom: 6px; }
+        .release-body li strong { color: #ccc; }
+
         .divider {
             border: none;
             height: 1px;
@@ -248,6 +284,7 @@
             </div>
             <ul class="nav-links">
                 <li><a href="#" class="active">Home</a></li>
+                <li><a href="#releases">Releases</a></li>
                 <li><a href="https://github.com/FreedomStrider39/elevatex-traffic-injector">GitHub</a></li>
             </ul>
         </nav>
@@ -309,6 +346,30 @@
 
         <hr class="divider">
 
+        <div class="section" id="releases">
+            <div class="section-label">Releases</div>
+            <h2>What's new.</h2>
+            <p>Every update and the fixes it includes. This list stays automatically in sync with the project's releases.</p>
+            <div id="releases-list">
+                <div class="release-item">
+                    <div class="release-head">
+                        <span class="release-tag">v1.1</span>
+                        <span class="release-name">Smoother, more realistic motion</span>
+                    </div>
+                    <div class="release-body">
+                        <ul>
+                            <li><strong>No more sinking or bouncing</strong> &mdash; ground aircraft no longer drift down or bounce.</li>
+                            <li><strong>Correct pitch and bank</strong> &mdash; nose-up on climbs, banking in turns.</li>
+                            <li><strong>Smoother take-off roll</strong> &mdash; guarded Hermite speed profile (PSXT-style).</li>
+                            <li><strong>Steadier taxi</strong> &mdash; rate-limited heading corrections, no nose wiggle.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <hr class="divider">
+
         <div class="section">
             <div class="section-label">Known bugs</div>
             <h2>What I'm fixing.</h2>
@@ -349,6 +410,59 @@
                 const el = document.getElementById('dl-meta');
                 if (el) el.innerHTML = 'Windows &middot; ' + mb + ' MB &middot; No Python required';
             }
+        })
+        .catch(() => {});
+    </script>
+
+    <script>
+    // Auto-sync the Releases list from GitHub (versions + fixes, no links)
+    function extractFixes(body) {
+        const lines = (body || '').split('\n');
+        let out = [], inSection = false;
+        for (const raw of lines) {
+            const l = raw.trim();
+            if (/^#{1,6}\s/.test(l)) { inSection = /what'?s new/i.test(l); continue; }
+            if (inSection && l.startsWith('- ')) out.push(l.slice(2));
+        }
+        if (!out.length) {                       // no "What's new" heading -> leading bullets
+            for (const raw of lines) {
+                const l = raw.trim();
+                if (/^#{1,6}\s/.test(l)) break;
+                if (l.startsWith('- ')) out.push(l.slice(2));
+            }
+        }
+        return out.map(t => t
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>')
+            .replace(/`(.+?)`/g, '<code>$1</code>')
+            .replace(/\[(.+?)\]\([^)]*\)/g, '$1'));
+    }
+    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases')
+        .then(r => r.ok ? r.json() : null)
+        .then(list => {
+            if (!Array.isArray(list)) return;
+            const pub = list.filter(r => !r.draft && !r.prerelease);
+            if (!pub.length) return;
+            const el = document.getElementById('releases-list');
+            if (!el) return;
+            el.innerHTML = pub.map(r => {
+                const tag = r.tag_name || '';
+                let name = r.name || '';
+                name = name.replace(new RegExp('^' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[-:]\\s*'), '');
+                const date = r.published_at
+                    ? new Date(r.published_at).toLocaleDateString(undefined,
+                        { year: 'numeric', month: 'short', day: 'numeric' })
+                    : '';
+                const fixes = extractFixes(r.body);
+                const body = fixes.length
+                    ? '<ul>' + fixes.map(f => '<li>' + f + '</li>').join('') + '</ul>'
+                    : '';
+                return '<div class="release-item"><div class="release-head">'
+                    + '<span class="release-tag">' + tag + '</span>'
+                    + (name ? '<span class="release-name">' + name + '</span>' : '')
+                    + '<span class="release-date">' + date + '</span>'
+                    + '</div><div class="release-body">' + body + '</div></div>';
+            }).join('');
         })
         .catch(() => {});
     </script>
