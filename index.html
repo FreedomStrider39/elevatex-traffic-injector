@@ -216,6 +216,18 @@
         .release-body li { color: #888; margin-bottom: 6px; }
         .release-body li strong { color: #ccc; }
 
+        .release-loading { color: #555; font-size: 0.9em; padding: 6px 2px; }
+        .release-inop {
+            background: rgba(231,76,60,0.08);
+            border: 1px solid rgba(231,76,60,0.4);
+            border-left: 3px solid #e74c3c;
+            color: #ff6b5e;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            padding: 16px 20px;
+            border-radius: 0 10px 10px 0;
+        }
+
         .divider {
             border: none;
             height: 1px;
@@ -351,20 +363,7 @@
             <h2>What's new.</h2>
             <p>Every update and the fixes it includes. This list stays automatically in sync with the project's releases.</p>
             <div id="releases-list">
-                <div class="release-item">
-                    <div class="release-head">
-                        <span class="release-tag">v1.1</span>
-                        <span class="release-name">Smoother, more realistic motion</span>
-                    </div>
-                    <div class="release-body">
-                        <ul>
-                            <li><strong>No more sinking or bouncing</strong> &mdash; ground aircraft no longer drift down or bounce.</li>
-                            <li><strong>Correct pitch and bank</strong> &mdash; nose-up on climbs, banking in turns.</li>
-                            <li><strong>Smoother take-off roll</strong> &mdash; guarded Hermite speed profile (PSXT-style).</li>
-                            <li><strong>Steadier taxi</strong> &mdash; rate-limited heading corrections, no nose wiggle.</li>
-                        </ul>
-                    </div>
-                </div>
+                <div class="release-loading">Loading releases&hellip;</div>
             </div>
         </div>
 
@@ -437,12 +436,16 @@
             .replace(/`(.+?)`/g, '<code>$1</code>')
             .replace(/\[(.+?)\]\([^)]*\)/g, '$1'));
     }
+    function showReleasesInop() {
+        const el = document.getElementById('releases-list');
+        if (el) el.innerHTML = '<div class="release-inop">SERVICE CURRENTLY INOP</div>';
+    }
     fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases')
-        .then(r => r.ok ? r.json() : null)
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(list => {
-            if (!Array.isArray(list)) return;
+            if (!Array.isArray(list)) { showReleasesInop(); return; }
             const pub = list.filter(r => !r.draft && !r.prerelease);
-            if (!pub.length) return;
+            if (!pub.length) { showReleasesInop(); return; }
             const el = document.getElementById('releases-list');
             if (!el) return;
             el.innerHTML = pub.map(r => {
@@ -464,7 +467,7 @@
                     + '</div><div class="release-body">' + body + '</div></div>';
             }).join('');
         })
-        .catch(() => {});
+        .catch(showReleasesInop);
     </script>
 </body>
 </html>
