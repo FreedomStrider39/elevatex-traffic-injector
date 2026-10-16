@@ -259,7 +259,7 @@
             <h1><span class="fade-line" style="animation-delay:0.2s;">Real pilots.</span><br><span class="live fade-line" style="animation-delay:0.6s;">Real traffic.</span><br><span class="fade-line" style="animation-delay:1.0s;">In your sim.</span></h1>
             <p><strong style="color:#ccc;">From your ELEVATEX flight tracker to your sim.</strong> Real live flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
             <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/latest/download/ElevateXTrafficInjector.zip">Download</a>
-            <div class="meta">Windows &middot; 10.7 MB &middot; No Python required</div>
+            <div class="meta" id="dl-meta">Windows &middot; &hellip; &middot; No Python required</div>
         </div>
 
         <hr class="divider">
@@ -336,6 +336,22 @@
         el.classList.add('reveal');
         observer.observe(el);
     });
+    </script>
+
+    <script>
+    // Auto-update file size from the latest GitHub release
+    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases/latest')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            if (!data || !data.assets) return;
+            const asset = data.assets.find(a => a.name === 'ElevateXTrafficInjector.zip');
+            if (asset) {
+                const mb = (asset.size / (1024 * 1024)).toFixed(1);
+                const el = document.getElementById('dl-meta');
+                if (el) el.innerHTML = 'Windows &middot; ' + mb + ' MB &middot; No Python required';
+            }
+        })
+        .catch(() => {});
     </script>
 </body>
 </html>
