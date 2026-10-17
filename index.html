@@ -441,30 +441,29 @@
     </script>
 
     <script>
-    // Total download counter across all releases
-    let dlTotal = 0;
-    function renderDownloads() {
+    // Live shared download counter (Abacus API) - updates for everyone in real time
+    const DL_COUNTER = 'https://abacus.jasoncameron.dev';
+    const DL_NS = 'freedomstrider39.github.io';
+    const DL_KEY = 'downloads';
+    function renderDownloads(n) {
         const el = document.getElementById('dl-count');
-        if (!el) return;
-        const label = dlTotal === 1 ? 'download' : 'downloads';
-        el.innerHTML = '<span class="num">' + dlTotal.toLocaleString() + '</span> ' + label;
+        if (!el || typeof n !== 'number') return;
+        const label = n === 1 ? 'download' : 'downloads';
+        el.innerHTML = '<span class="num">' + n.toLocaleString() + '</span> ' + label;
     }
-    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases?per_page=100')
+    fetch(DL_COUNTER + '/get/' + DL_NS + '/' + DL_KEY)
         .then(r => r.ok ? r.json() : null)
-        .then(list => {
-            if (!Array.isArray(list)) return;
-            dlTotal = list.reduce((sum, rel) =>
-                sum + (rel.assets || []).reduce((s, a) => s + (a.download_count || 0), 0), 0);
-            renderDownloads();
-        })
+        .then(d => { if (d && typeof d.value === 'number') renderDownloads(d.value); })
         .catch(() => {});
 
-    // Bump the counter immediately when the download button is clicked
+    // Bump the shared counter the moment the download button is clicked
     const dlBtn = document.querySelector('.download-btn');
     if (dlBtn) {
         dlBtn.addEventListener('click', () => {
-            dlTotal += 1;
-            renderDownloads();
+            fetch(DL_COUNTER + '/hit/' + DL_NS + '/' + DL_KEY)
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { if (d && typeof d.value === 'number') renderDownloads(d.value); })
+                .catch(() => {});
         });
     }
     </script>
