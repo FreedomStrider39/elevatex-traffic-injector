@@ -145,6 +145,17 @@
             background: #e74c3c; box-shadow: 0 0 8px #e74c3c;
         }
         .hero .meta { margin-top: 14px; font-size: 0.84em; color: #444; }
+        .downloads-count {
+            margin-top: 10px;
+            font-size: 0.82em;
+            color: #888;
+            letter-spacing: 0.2px;
+        }
+        .downloads-count .num {
+            color: #faa307;
+            font-weight: 700;
+            text-shadow: 0 0 12px rgba(250,163,7,0.4);
+        }
 
         .section {
             max-width: 700px;
@@ -334,6 +345,7 @@
             <p><strong style="color:#ccc;">From your ELEVATEX flight tracker to your sim.</strong> Real live flights injected into MSFS 2024 as AI aircraft with FSLTL liveries. Free, open source, and built for the community.</p>
             <a class="download-btn" href="https://github.com/FreedomStrider39/elevatex-traffic-injector/releases/latest/download/ElevateXTrafficInjector.zip">Download Latest</a>
             <div class="meta" id="dl-meta">Windows &middot; 30.7 MB &middot; No Python required</div>
+            <div class="downloads-count" id="dl-count"></div>
         </div>
 
         <hr class="divider">
@@ -424,6 +436,22 @@
                 const el = document.getElementById('dl-meta');
                 if (el) el.innerHTML = 'Windows &middot; ' + mb + ' MB &middot; No Python required';
             }
+        })
+        .catch(() => {});
+    </script>
+
+    <script>
+    // Total download counter across all releases
+    fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases?per_page=100')
+        .then(r => r.ok ? r.json() : null)
+        .then(list => {
+            if (!Array.isArray(list)) return;
+            const total = list.reduce((sum, rel) =>
+                sum + (rel.assets || []).reduce((s, a) => s + (a.download_count || 0), 0), 0);
+            const el = document.getElementById('dl-count');
+            if (!el) return;
+            const label = total === 1 ? 'download' : 'downloads';
+            el.innerHTML = '<span class="num">' + total.toLocaleString() + '</span> ' + label + ' so far';
         })
         .catch(() => {});
     </script>
