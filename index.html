@@ -442,18 +442,31 @@
 
     <script>
     // Total download counter across all releases
+    let dlTotal = 0;
+    function renderDownloads() {
+        const el = document.getElementById('dl-count');
+        if (!el) return;
+        const label = dlTotal === 1 ? 'download' : 'downloads';
+        el.innerHTML = '<span class="num">' + dlTotal.toLocaleString() + '</span> ' + label;
+    }
     fetch('https://api.github.com/repos/FreedomStrider39/elevatex-traffic-injector/releases?per_page=100')
         .then(r => r.ok ? r.json() : null)
         .then(list => {
             if (!Array.isArray(list)) return;
-            const total = list.reduce((sum, rel) =>
+            dlTotal = list.reduce((sum, rel) =>
                 sum + (rel.assets || []).reduce((s, a) => s + (a.download_count || 0), 0), 0);
-            const el = document.getElementById('dl-count');
-            if (!el) return;
-            const label = total === 1 ? 'download' : 'downloads';
-            el.innerHTML = '<span class="num">' + total.toLocaleString() + '</span> ' + label + ' so far';
+            renderDownloads();
         })
         .catch(() => {});
+
+    // Bump the counter immediately when the download button is clicked
+    const dlBtn = document.querySelector('.download-btn');
+    if (dlBtn) {
+        dlBtn.addEventListener('click', () => {
+            dlTotal += 1;
+            renderDownloads();
+        });
+    }
     </script>
 </body>
 </html>
