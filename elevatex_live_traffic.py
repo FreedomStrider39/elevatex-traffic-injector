@@ -1219,6 +1219,7 @@ class ActiveInjectedAircraft:
     smooth_hdg: Optional[float] = None
     smooth_pitch: Optional[float] = None  # smoothed attitude (deg) for banked turns / climbs
     smooth_bank: Optional[float] = None
+    ground_lock: float = 0.0  # 0..1 blend of rendered altitude onto the field elevation
     last_tick: float = 0.0  # monotonic time of last position write
     logged: bool = False  # first-write coordinates logged once (render diagnosis)
     att: Optional[object] = None  # AttitudeModel: pitch/bank + rotation, flare, derotation
@@ -1759,16 +1760,8 @@ class LiveTrafficInjector:
             pose = flight.track.step(now)
             if pose is None:
                 continue
-            lat, lon, alt_ft = pose.lat, pose.lon, pose.alt
+            lat, lon = pose.lat, pose.lon
             heading, gs_kt = pose.hdg, pose.gs
-            on_ground = is_on_ground(pose, flight.origin_elev_ft,
-                                     flight.dest_elev_ft)
-            if on_ground:
-                elevs = [e for e in (flight.origin_elev_ft,
-                                     flight.dest_elev_ft)
-                         if e > -100.0]
-                if elevs:
-                    alt_ft = min(elevs, key=lambda e: abs(e - alt_ft))
             dt = now - active.last_tick if active.last_tick else TRACK_INTERVAL_S
             if active.att is None:
                 active.att = AttitudeModel()
@@ -1776,8 +1769,36 @@ class LiveTrafficInjector:
                 pose,
                 ground_ref(pose, flight.origin_elev_ft, flight.dest_elev_ft),
                 dt)
-            if not on_ground:
-                alt_ft = alt_model   # flare / smoothed profile near the ground
+
+            # Rendered altitude is always the AttitudeModel output: it is
+            # continuous through rotation, flare and derotation. Near the
+            # runway we additionally EASE it onto the known field elevation,
+            # because the feed's on-ground altitude is noisy by tens of feet.
+            # Previously we snapped to the field elevation the instant the
+            # on-ground flag tripped, which produced a visible single-frame
+            # drop on touchdown (the landing "step").
+            agl = agl_ft(pose, flight.origin_elev_ft, flight.dest_elev_ft)
+            elevs = [e for e in (flight.origin_elev_ft, flight.dest_elev_ft)
+                     if e > -100.0]
+            # Broadened on-ground test: once the aircraft is low, level and
+            # no longer on a steep approach, it is on the runway -- even while
+            # still rolling out above 50 kt (the old gs-only gate let the
+            # noisy feed altitude show through the whole rollout).
+            on_ground = is_on_ground(pose, flight.origin_elev_ft,
+                                     flight.dest_elev_ft)
+            if (not on_ground and not active.att.flare and agl is not None
+                    and agl < 25.0 and pose.vs > -300.0 and gs_kt < 220.0):
+                on_ground = True
+            field = (min(elevs, key=lambda e: abs(e - alt_model))
+                     if elevs else None)
+            if field is not None:
+                wants = 1.0 if (on_ground or active.att.landed) else 0.0
+                tau = 0.6 if wants > active.ground_lock else 1.4
+                active.ground_lock += ((wants - active.ground_lock)
+                                       * _smooth_factor(dt, tau))
+                alt_ft = alt_model + (field - alt_model) * active.ground_lock
+            else:
+                alt_ft = alt_model
 
             # Freeze the object once so the AI brain/physics stops fighting our
             # writes. Coordinate writes only (PLANE LATITUDE etc), never Initial

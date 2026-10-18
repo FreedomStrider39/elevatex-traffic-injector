@@ -1,5 +1,5 @@
-﻿ElevateX Live Traffic Injector V1
-=================================
+﻿ElevateX Live Traffic Injector v1.5
+===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
 
@@ -37,13 +37,20 @@ Usage
 3. Enter your ElevateX username (optional - excludes YOUR flights).
 4. Press START. Aircraft appear within ~30 s.
 
-Known bugs (V1)
----------------
-- Takeoff speed bug: aircraft on the runway can suddenly surge
-  forward, then settle, then surge again instead of accelerating
-  smoothly. A fix is in progress.
+Known bugs (v1.5)
+-----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is not always correct yet. A fix is in progress.
+
+Fixed in v1.5
+-------------
+- Takeoff/landing speed surge: aircraft no longer step or surge on
+  the runway. The along-track speed is now continuous across feed
+  samples, so taxi, take-off and roll-out glide smoothly.
+- Landing flare: a proper nose-up flare that eases onto the runway
+  instead of a late pitch twitch, with no altitude snap at touchdown.
+- Bank twitch: noisy feed headings no longer roll the aircraft; bank
+  is eased and rate-limited, and wings are held level on the runway.
 
 Notes
 -----

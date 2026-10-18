@@ -24,13 +24,6 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Optional
 
-# Along-track timing: the speed played at the END of a segment is the reported
-# ground speed, held within this band around the speed needed to cover the
-# distance to that sample. Tighter = steadier taxi; looser = follows the
-# reported ground speed more closely (sharper take-off acceleration).
-SPEED_TRUST_LO = 0.75
-SPEED_TRUST_HI = 2.0
-
 
 @dataclass
 class Sample:
@@ -172,29 +165,26 @@ def _interp(a: Sample, b: Sample, u: float, seg: float, elevs=()) -> Pose:
     m0x, m0y = tangent(a)
     m1x, m1y = tangent(b)
 
-    # TIMING along that path is a separate monotone speed profile. We model
-    # speed s(tau) as a *guarded* cubic Hermite in tau from the previous
-    # sample's ground speed to this sample's ground speed, with zero end
-    # slopes (ease-in/ease-out). Because s(tau)=va+(vb-va)(3tau^2-2tau^3) has
-    # s'(tau)=6tau(1-tau) >= 0, it is monotone and never overshoots or
-    # reverses -- this is exactly PSXT's "guarded Hermite speed interpolation"
-    # for take-off/landing rolls. Integrating s to get the distance fraction
-    # gives w(u)=[va*u + (vb-va)(u^3 - u^4/2)] / mean, which accelerates and
-    # decays gently instead of the old S-shaped distance profile that crawled
-    # then suddenly rushed on take-off. va is the speed the previous segment
-    # ended at (same reported gs at the shared sample), so speed is continuous
-    # across segments.
+    # TIMING along that path is a monotone Hermite distance fraction w(u). We
+    # choose the two endpoint slopes of w so that the *physical* speed at each
+    # end equals the reported ground speed: physical speed = chord/seg * w'(u)
+    # = avg * w'(u), so setting w'(0)=gs_a/avg and w'(1)=gs_b/avg makes the
+    # rendered speed pass exactly through the reported speed at every sample.
+    # Because the shared sample's gs is used by both adjacent segments, the
+    # speed is then continuous across sample boundaries (no per-sample surge).
+    # Slopes are clamped to [0, 3] to keep w monotone (Fritsch-Carlson): w
+    # never overshoots past the samples or reverses, and the distance still
+    # integrates to exactly the chord so the path lands on each sample.
     avg = chord / seg                                  # NM/s needed on average
-    if chord < 0.002:
+    if chord < 0.002 or avg <= 1e-9:
         w = u                                          # parked: nothing to time
     else:
-        va = min(max(a.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
-        vb = min(max(b.gs / 3600.0, SPEED_TRUST_LO * avg), SPEED_TRUST_HI * avg)
-        denom = (va + vb) * 0.5                        # mean speed (= integral of s over 0..1)
-        if denom <= 1e-9:
-            w = u
-        else:
-            w = (va * u + (vb - va) * (u * u * u - 0.5 * u * u * u * u)) / denom
+        su10 = u * u * u - 2 * u * u + u               # cubic-basis, zero slope at 0/1
+        su01 = -2 * u * u * u + 3 * u * u              # zero->one ease
+        su11 = u * u * u - u * u                       # slope at 1
+        d0 = min(max(a.gs / 3600.0 / avg, 0.0), 3.0)   # start speed / avg
+        d1 = min(max(b.gs / 3600.0 / avg, 0.0), 3.0)   # end speed / avg
+        w = su10 * d0 + su01 + su11 * d1
         w = min(max(w, 0.0), 1.0)
     w2 = w * w
     w3 = w2 * w
@@ -340,9 +330,9 @@ class Track:
 GROUND_HOLD_KT = 60.0        # below this speed a gap means "hold position", not dead-reckon
 GROUND_AGL_FT = 40.0         # below this (gs >= 50) the aircraft is on the runway
 ROTATE_GS_KT = 110.0         # earliest speed at which the nose may rotate
-ROTATE_PITCH_DEG = 8.0       # pitch reached on the runway before lift-off
+ROTATE_PITCH_DEG = 11.0      # pitch reached on the runway before lift-off
 FLARE_TD_SINK_FPS = 2.8      # sink rate at touchdown (~170 fpm)
-FLARE_PITCH_BONUS_DEG = 1.5  # extra nose-up added over the flare itself
+FLARE_PITCH_BONUS_DEG = 3.5  # extra nose-up added over the flare itself
 DEROTATE_RATE_DPS = 1.8      # nose lowering rate after touchdown
 LAND_GS_DROP_KT = 3.0        # next sample this much slower than the approach => it is on the runway
 
@@ -391,9 +381,11 @@ class AttitudeModel:
              rotation before lift-off; a proper landing flare; nose lowering
              after touchdown.
     flare  = exponential sink-rate decay toward the runway surface, started
-             at ~3 s above it, ending at ~170 fpm at touchdown. The runway
-             height is read from the NEXT sample when that sample is on the
-             ground (so it is the feed's own ground level, not a guess).
+             ~3 s above it, ending at ~170 fpm at touchdown. The runway height
+             is the NEXT sample's altitude when that sample is clearly on the
+             ground, otherwise the destination field elevation (so the flare
+             always has a surface to aim at, never a late pitch-only twitch).
+             It shapes BOTH the pitch (a real nose-up) and the altitude.
     """
 
     def __init__(self) -> None:
@@ -408,6 +400,8 @@ class AttitudeModel:
         self.hb = 0.0
         self.ref = 0.0            # surface altitude used by the flare (ft MSL)
         self.off = 0.0            # decaying altitude offset (ft)
+        self.hr = None            # eased heading rate (deg/s) driving bank
+        self.bank = None          # eased / rate-limited bank (deg)
 
     def update(self, pose: Pose, elev_ft: Optional[float], dt: float):
         """-> (pitch_deg, bank_deg, alt_ft)"""
@@ -424,24 +418,27 @@ class AttitudeModel:
         # ---- landing flare: trigger -------------------------------------
         # The feed has no on-ground flag and its altitude is only good to a
         # few tens of feet, so the runway height is taken from the NEXT sample
-        # only when that sample clearly IS on the runway: low, and noticeably
-        # slower than the approach (braking). Then the flare shapes both
-        # pitch and altitude. Otherwise only a short, late, pitch-only flare
-        # is used, close to the field elevation.
+        # when that sample clearly IS on the runway (low and noticeably slower
+        # than the approach = braking); otherwise we fall back to the known
+        # field elevation. Either way the flare shapes pitch AND altitude.
         if (not self.flare and not self.landed and elev_ft is not None
                 and 60.0 <= gs <= 200.0 and pose.vs < -200.0):
-            floor = None
+            # Prefer the feed's own runway height (the NEXT sample, when it is
+            # clearly on the ground and slower). But always fall back to the
+            # destination field elevation so the flare has a surface to aim
+            # at: without a floor the flare used to run pitch-only over the
+            # last few metres and barely pitched up at all.
+            ref = elev_ft
             if (pose.next_alt is not None and pose.next_gs is not None
                     and pose.prev_gs is not None):
                 na = pose.next_alt - elev_ft
                 if (-30.0 <= na <= 25.0 and pose.next_gs <= 200.0
                         and pose.next_gs <= pose.prev_gs - LAND_GS_DROP_KT):
-                    floor = pose.next_alt
+                    ref = pose.next_alt
             v0 = min(max(-pose.vs / 60.0, 4.0), 20.0)            # ft/s
-            if floor is not None:
-                ref, hmax = floor, min(max(3.0 * v0, 15.0), 40.0)
-            else:
-                ref, hmax = elev_ft, 12.0
+            # start the flare high enough (~3 s of sink) for a gentle, visible
+            # nose-up rather than a late twitch in the last few feet
+            hmax = min(max(3.0 * v0, 20.0), 55.0)
             h = pose.alt - ref
             if -5.0 <= h <= hmax:
                 td = min(FLARE_TD_SINK_FPS, 0.6 * v0)
@@ -450,7 +447,7 @@ class AttitudeModel:
                 self.hb = td * self.tau
                 self.h = self.hf
                 self.ref = ref
-                self.shape_alt = floor is not None
+                self.shape_alt = True
                 self.flare = True
                 fresh = True
 
@@ -484,7 +481,7 @@ class AttitudeModel:
             vs_s = -(self.h + self.hb) / self.tau * 60.0          # shaped sink (fpm)
             prog = 1.0 - min(self.h / self.hf, 1.0)
             target = _fpa(vs_s, gs) + _aoa(gs) + FLARE_PITCH_BONUS_DEG * prog
-            up, dn = 1.2, 1.0
+            up, dn = 2.0, 1.0
         elif self.landed:
             target, dn = 0.0, DEROTATE_RATE_DPS
         elif gs < 50.0:
@@ -510,10 +507,26 @@ class AttitudeModel:
         else:
             self.pitch = _slew(self.pitch, target, dt, tau_p, up, dn)
 
-        bank = max(-30.0, min(30.0, pose.hdg_rate * (7.0 + gs / 150.0)))
-        if agl is not None and agl < 100.0 and gs < 200.0:
-            bank = max(-8.0, min(8.0, bank))                      # wings level near the ground
-        return self.pitch, bank, alt_out
+        # ---- bank -------------------------------------------------------
+        # Derived from the heading rate (a standard-rate turn banks naturally).
+        # The feed heading is noisy and the rate is only known per feed
+        # segment, so ease the RATE itself: that noises out a roll twitch
+        # without slowing the roll-in of a real turn. The roll is then
+        # rate-limited, and forced wings-level on the runway.
+        if self.hr is None:
+            self.hr = pose.hdg_rate
+        else:
+            self.hr += (pose.hdg_rate - self.hr) * (1.0 - math.exp(-dt / 0.6))
+        target_bank = max(-30.0, min(30.0, self.hr * (7.0 + gs / 150.0)))
+        if agl is not None and agl < GROUND_AGL_FT:               # on/near the runway
+            target_bank = 0.0
+        elif agl is not None and agl < 100.0 and gs < 200.0:
+            target_bank = max(-8.0, min(8.0, target_bank))        # wings near level on final
+        if self.bank is None:
+            self.bank = target_bank
+        else:
+            self.bank = _slew(self.bank, target_bank, dt, 0.6, 12.0, 12.0)
+        return self.pitch, self.bank, alt_out
 
 
 def attitude(pose: Pose, agl: Optional[float] = None):
