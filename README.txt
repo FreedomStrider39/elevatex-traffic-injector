@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.6
+﻿ElevateX Live Traffic Injector v1.7
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -37,10 +37,19 @@ Usage
 3. Enter your ElevateX username (optional - excludes YOUR flights).
 4. Press START. Aircraft appear within ~30 s.
 
-Known bugs (v1.6)
+Known bugs (v1.7)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is not always correct yet. A fix is in progress.
+
+Fixed in v1.7
+-------------
+- Aircraft lights: injected traffic is no longer dark. A frozen AI
+  object never runs the model's own light logic, so the injector now
+  commands the standard light states itself (as JoinFS/vPilot do):
+  nav + beacon always, strobes on the runway and in the air, taxi
+  lights on the ground, and landing lights on the ground and on the
+  low approach.
 
 Fixed in v1.6
 -------------

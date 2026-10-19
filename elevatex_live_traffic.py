@@ -972,6 +972,7 @@ class ElevateXSimConnect:
         self.aircraft_requests = None
         self._freeze_events = None
         self._gear_events = None
+        self._light_events = None
         self._write_fails: Dict[int, int] = {}  # object_id -> consecutive failures
 
     @property
@@ -1154,6 +1155,47 @@ class ElevateXSimConnect:
         )
         return self.sm.IsHR(hr, 0)
 
+    def _get_light_events(self):
+        """Map the light state events once and cache their IDs.
+
+        A frozen AI object never runs the model's own light logic, so its
+        nav/beacon/strobe/taxi/landing lights stay dark. We command the light
+        STATES ourselves (matching what JoinFS/vPilot do): the *_SET events
+        take 1=on / 0=off. Logo and wing lights are left as the model had them.
+        """
+        if self._light_events is None:
+            self._light_events = {
+                name: self.sm.map_to_sim_event(name.encode())
+                for name in ("NAV_LIGHTS_SET", "BEACON_LIGHTS_SET",
+                             "STROBE_LIGHTS_SET", "TAXI_LIGHTS_SET",
+                             "LANDING_LIGHTS_SET")
+            }
+        return self._light_events
+
+    def set_lights(self, object_id: int, states: Dict[str, bool]) -> Dict[str, bool]:
+        """Set light states on an AI object. `states` maps event name -> bool.
+
+        Returns the subset of states the sim accepted, so the caller can
+        remember only what actually took and retry the rest next frame.
+        """
+        events = self._get_light_events()
+        accepted: Dict[str, bool] = {}
+        for name, on in states.items():
+            ev = events.get(name)
+            if ev is None:
+                continue
+            hr = self.sm.dll.TransmitClientEvent(
+                self.sm.hSimConnect,
+                object_id,
+                ev.value,
+                1 if on else 0,  # 1 = on, 0 = off
+                SIMCONNECT_GROUP_PRIORITY_HIGHEST.value,
+                SIMCONNECT_EVENT_FLAG.SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY.value,
+            )
+            if self.sm.IsHR(hr, 0):
+                accepted[name] = on
+        return accepted
+
     def update_position(self, object_id: int, lat: float, lon: float, alt_ft: float, heading: float, speed_kt: float, on_ground: bool = False, pitch_deg: float = 0.0, bank_deg: float = 0.0):
         """Update position/heading/attitude of an active ElevateX aircraft.
 
@@ -1252,6 +1294,7 @@ class ActiveInjectedAircraft:
     ground_lock: float = 0.0  # 0..1 blend of rendered altitude onto the field elevation
     on_ground_latch: bool = False  # sticky on-ground state (survives feed noise)
     gear_down: Optional[bool] = None  # last commanded gear state (None = not yet sent)
+    lights: Dict[str, bool] = dataclasses.field(default_factory=dict)  # last accepted light states
     last_tick: float = 0.0  # monotonic time of last position write
     logged: bool = False  # first-write coordinates logged once (render diagnosis)
     att: Optional[object] = None  # AttitudeModel: pitch/bank + rotation, flare, derotation
@@ -1867,6 +1910,27 @@ class LiveTrafficInjector:
             if active.gear_down != want_gear:
                 if self.sim.set_gear(active.object_id, want_gear):
                     active.gear_down = want_gear
+
+            # Lights: a frozen AI object never runs the model's own light
+            # logic, so it flies dark. Command the standard light states
+            # ourselves (as JoinFS/vPilot do), driven by the same phase cues
+            # as the gear: nav + beacon always (aircraft is live), strobes on
+            # the runway and in the air, taxi on while on the ground, landing
+            # lights on the ground and on the low approach. Only changed
+            # states are sent, and accepted ones are remembered.
+            want_lights = {
+                "NAV_LIGHTS_SET": True,
+                "BEACON_LIGHTS_SET": True,
+                "STROBE_LIGHTS_SET": (not on_ground) or gs_kt > 40.0,
+                "TAXI_LIGHTS_SET": on_ground,
+                "LANDING_LIGHTS_SET": (on_ground or active.att.flare
+                                       or (agl is not None and agl < 2500.0)),
+            }
+            changes = {n: v for n, v in want_lights.items()
+                       if active.lights.get(n) != v}
+            if changes:
+                accepted = self.sim.set_lights(active.object_id, changes)
+                active.lights.update(accepted)
 
             # Freeze the object once so the AI brain/physics stops fighting our
             # writes. Coordinate writes only (PLANE LATITUDE etc), never Initial

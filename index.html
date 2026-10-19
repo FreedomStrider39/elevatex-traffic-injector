@@ -399,6 +399,7 @@
         <div class="section">
             <div class="section-label">Known bugs</div>
             <h2>What I'm fixing.</h2>
+            <div class="bug-item"><strong>Aircraft lights &mdash; fixed in v1.7</strong> &mdash; injected traffic is no longer dark. A frozen AI object never runs the model's own light logic, so the injector now commands the standard light states itself (nav, beacon, strobe, taxi and landing), just as JoinFS and vPilot do. <em>Fixed.</em></div>
             <div class="bug-item"><strong>Landing &amp; take-off &mdash; fixed in v1.6</strong> &mdash; arrivals no longer float just above the runway and settle only after rolling past it (the flare altitude is now clamped to the real altitude, so it touches down on the runway on time); injected aircraft now lower and raise their landing gear; and take-off is a single clean rotation instead of pitching up, settling back down and pitching up again. <em>Fixed.</em></div>
             <div class="bug-item"><strong>Smoothness &mdash; fixed in v1.5</strong> &mdash; ground, take-off and landing motion was reworked so injected traffic glides instead of stepping or surging. The along-track speed is now continuous across feed updates, the landing flare eases onto the runway, and noisy headings no longer roll the aircraft. <em>Fixed.</em></div>
             <div class="bug-item"><strong>Flight-attitude accuracy</strong> &mdash; nose-up/nose-down during climbs and descents isn't always exact yet. <em>Being tuned.</em></div>
