@@ -402,6 +402,10 @@ class AttitudeModel:
         self.off = 0.0            # decaying altitude offset (ft)
         self.hr = None            # eased heading rate (deg/s) driving bank
         self.bank = None          # eased / rate-limited bank (deg)
+        self.ga_t = 0.0           # seconds spent in a sustained climb (go-around)
+        self.was_high = 0.0       # highest AGL seen -- a take-off roll never got high
+        self.cool = 0.0           # s; blocks re-arming the flare right after it ends
+        self.alt_s = None         # lightly smoothed feed altitude (bounds the flare)
 
     def update(self, pose: Pose, elev_ft: Optional[float], dt: float):
         """-> (pitch_deg, bank_deg, alt_ft)"""
@@ -413,6 +417,23 @@ class AttitudeModel:
         if gs < 50.0:                        # parked / taxi: reset sequences
             self.flare = self.landed = self.rot = False
             self.off = 0.0
+            self.ga_t = 0.0
+            self.was_high = 0.0
+            self.cool = 0.0
+        if self.cool > 0.0:
+            self.cool = max(0.0, self.cool - dt)
+
+        if agl is not None and agl > self.was_high:
+            self.was_high = agl
+
+        # Lightly smoothed feed altitude. Used only to stop the flare altitude
+        # from floating ABOVE the real aircraft (see the flare run): the flare
+        # shape is an exponential that can lag a fast late sink, which left the
+        # aircraft hovering just above the runway and touching down long.
+        if self.alt_s is None:
+            self.alt_s = pose.alt
+        else:
+            self.alt_s += (pose.alt - self.alt_s) * (1.0 - math.exp(-dt / 0.5))
 
         fresh = False
         # ---- landing flare: trigger -------------------------------------
@@ -421,8 +442,19 @@ class AttitudeModel:
         # when that sample clearly IS on the runway (low and noticeably slower
         # than the approach = braking); otherwise we fall back to the known
         # field elevation. Either way the flare shapes pitch AND altitude.
+        # The ground speed trend tells a landing from a take-off roll without
+        # trusting the (very noisy near-ground) sink rate: an aircraft taking
+        # off is ACCELERATING hard, one on approach is not.
+        # A flare is only ever valid for an ARRIVAL: something that was high
+        # above the field and is now coming down. An aircraft only ever
+        # near the surface (a take-off roll) must never flare, no matter how
+        # noisy its sink-rate reads.
+        accelerating = (pose.next_gs is not None
+                        and pose.next_gs - pose.gs >= 8.0)
         if (not self.flare and not self.landed and elev_ft is not None
-                and 60.0 <= gs <= 200.0 and pose.vs < -200.0):
+                and 60.0 <= gs <= 200.0 and pose.vs < -200.0
+                and not accelerating and self.was_high > 200.0
+                and self.cool <= 0.0):
             # Prefer the feed's own runway height (the NEXT sample, when it is
             # clearly on the ground and slower). But always fall back to the
             # destination field elevation so the flare has a surface to aim
@@ -435,7 +467,11 @@ class AttitudeModel:
                 if (-30.0 <= na <= 25.0 and pose.next_gs <= 200.0
                         and pose.next_gs <= pose.prev_gs - LAND_GS_DROP_KT):
                     ref = pose.next_alt
-            v0 = min(max(-pose.vs / 60.0, 4.0), 20.0)            # ft/s
+            # Design sink-rate range. Allow steep approaches (up to ~60 ft/s /
+            # 3600 fpm) so the flare's shaped descent is never slower than the
+            # real one -- otherwise a steep arrival floated above the runway,
+            # never touched down, and eventually aborted (a visible glitch).
+            v0 = min(max(-pose.vs / 60.0, 4.0), 60.0)            # ft/s
             # start the flare high enough (~3 s of sink) for a gentle, visible
             # nose-up rather than a late twitch in the last few feet
             hmax = min(max(3.0 * v0, 20.0), 55.0)
@@ -455,15 +491,37 @@ class AttitudeModel:
         if self.flare:
             if not fresh:
                 self.h = (self.h + self.hb) * math.exp(-dt / self.tau) - self.hb
-            if pose.vs > 300.0 or pose.alt - self.ref > 2.5 * self.hf + 10.0:
+            # Never hover ABOVE the real aircraft: clamp the shaped height to
+            # the (smoothed) height the feed actually shows, +2 ft of slack.
+            # Without this the exponential's slow tail floated the flare down
+            # the runway and touched down only after vacating.
+            if self.alt_s is not None:
+                self.h = min(self.h, max(self.alt_s - self.ref, 0.0) + 2.0)
+            # Go-around: only when the aircraft has genuinely climbed away for
+            # a sustained time. A single noisy feed sample (the derived
+            # sink-rate is worthless near the ground) must NOT abort the flare
+            # -- that is what bounced the aircraft. The altitude guard uses the
+            # smooth shaped height, never the raw noisy feed altitude.
+            if pose.vs > 250.0:
+                self.ga_t += dt
+            else:
+                self.ga_t = 0.0
+            # A real go-around climbs AWAY, i.e. above the height at which the
+            # flare began (ref + hf). Near the runway the noisy sink-rate must
+            # never veto the landing.
+            climbing_away = pose.alt > self.ref + self.hf + 25.0
+            if (self.ga_t > 1.0 and climbing_away) \
+                    or self.h > 2.0 * self.hf + 20.0:
                 # go-around: hand the altitude back to the track smoothly
                 if self.shape_alt:
                     self.off = self.ref + max(self.h, 0.0) - pose.alt
                 self.flare = False
+                self.cool = 3.0
             elif self.h <= 0.0:                                   # touchdown
                 self.h = 0.0
                 self.flare = False
                 self.landed = True
+                self.cool = 6.0
                 self.off = (self.ref - pose.alt) if self.shape_alt else 0.0
             elif self.shape_alt:
                 alt_out = self.ref + self.h
@@ -472,7 +530,10 @@ class AttitudeModel:
             self.off *= math.exp(-dt / (1.0 if self.landed else 2.5))
             alt_out = pose.alt + self.off
 
-        if self.landed and ((agl is not None and agl > 150.0) or pose.vs > 300.0):
+        # Clear the landed flag only on a genuine climb-away (touch-and-go),
+        # never on a noisy sink-rate reading.
+        if self.landed and (pose.alt > self.ref + 150.0
+                            or (agl is not None and agl > 150.0)):
             self.landed = False                                   # touch-and-go
 
         # ---- pitch target -----------------------------------------------
@@ -486,21 +547,29 @@ class AttitudeModel:
             target, dn = 0.0, DEROTATE_RATE_DPS
         elif gs < 50.0:
             target = 0.0
-        elif agl is not None and agl < GROUND_AGL_FT and pose.vs > -250.0:   # runway roll
-            ahead = (pose.next_alt is not None and pose.next_alt - pose.alt > 150.0)
-            # rotate at ~78% of the climb-out speed (type-agnostic VR), or as
-            # soon as the track starts to leave the ground
-            vr = 0.78 * pose.next_gs if pose.next_gs else ROTATE_GS_KT
-            if ahead and (gs >= vr or pose.vs > 100.0 or agl > 6.0):
-                self.rot = True
-            target = ROTATE_PITCH_DEG if self.rot else 0.0
-            up = 3.0
         else:
-            target = max(-8.0, min(15.0, _fpa(pose.vs, gs) + _aoa(gs)))
+            # Rotate once, at ~78% of the climb-out speed AND with the NEXT
+            # feed sample clearly higher (about to leave the ground). The old
+            # test also fired on `pose.vs > 100` / `agl > 6` -- both are pure
+            # noise near the runway, so the aircraft pitched up, settled back
+            # onto the runway, then pitched up again (the double rotation).
+            # Once rotating we HOLD the rotation pitch (no branch dip) until
+            # clearly climbing away.
+            ahead = (pose.next_alt is not None
+                     and pose.next_alt - pose.alt > 150.0)
+            vr = 0.78 * pose.next_gs if pose.next_gs else ROTATE_GS_KT
+            low = agl is not None and agl < GROUND_AGL_FT and pose.vs > -250.0
+            if not self.rot and low and ahead and gs >= vr:
+                self.rot = True
+            if self.rot and agl is not None and agl > 200.0:
+                self.rot = False
             if self.rot:
+                target = ROTATE_PITCH_DEG
                 up = 3.0
-                if agl is not None and agl > 200.0:
-                    self.rot = False
+            elif low:
+                target = 0.0
+            else:
+                target = max(-8.0, min(15.0, _fpa(pose.vs, gs) + _aoa(gs)))
 
         if self.pitch is None:
             self.pitch = target
@@ -543,4 +612,8 @@ def attitude(pose: Pose, agl: Optional[float] = None):
 def is_on_ground(pose: Pose, origin_elev_ft: float, dest_elev_ft: float) -> bool:
     known = [pose.alt - e for e in (origin_elev_ft, dest_elev_ft) if e > -100.0]
     min_agl = min(known) if known else pose.alt
-    return pose.gs < 50.0 and abs(pose.vs) < 400.0 and min_agl < 400.0
+    # Very low ground speed is definitive on the ground. Do NOT also test
+    # pose.vs here: near the ground the derived sink-rate is pure noise
+    # (+/- hundreds of fpm), which used to flip a parked/rolling aircraft to
+    # "airborne" at random and make the altitude blend jitter.
+    return pose.gs < 50.0 and min_agl < 400.0

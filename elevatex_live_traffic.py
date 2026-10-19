@@ -971,6 +971,7 @@ class ElevateXSimConnect:
         self.sm = _DispatchSimConnect(auto_connect=False)
         self.aircraft_requests = None
         self._freeze_events = None
+        self._gear_events = None
         self._write_fails: Dict[int, int] = {}  # object_id -> consecutive failures
 
     @property
@@ -1124,6 +1125,35 @@ class ElevateXSimConnect:
                 ok = False
         return ok
 
+    def _get_gear_events(self):
+        """Map the gear-up / gear-down events once and cache their IDs."""
+        if self._gear_events is None:
+            self._gear_events = {
+                True: self.sm.map_to_sim_event(b"GEAR_DOWN"),
+                False: self.sm.map_to_sim_event(b"GEAR_UP"),
+            }
+        return self._gear_events
+
+    def set_gear(self, object_id: int, down: bool) -> bool:
+        """Raise/lower an AI object's landing gear.
+
+        A frozen/teleported AI object never runs the sim's own gear logic, so
+        its gear would stay wherever it spawned. We command it explicitly via
+        the GEAR_DOWN / GEAR_UP events addressed to the object.
+        """
+        ev = self._get_gear_events().get(bool(down))
+        if ev is None:
+            return False
+        hr = self.sm.dll.TransmitClientEvent(
+            self.sm.hSimConnect,
+            object_id,
+            ev.value,
+            0,  # not used by the gear events
+            SIMCONNECT_GROUP_PRIORITY_HIGHEST.value,
+            SIMCONNECT_EVENT_FLAG.SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY.value,
+        )
+        return self.sm.IsHR(hr, 0)
+
     def update_position(self, object_id: int, lat: float, lon: float, alt_ft: float, heading: float, speed_kt: float, on_ground: bool = False, pitch_deg: float = 0.0, bank_deg: float = 0.0):
         """Update position/heading/attitude of an active ElevateX aircraft.
 
@@ -1220,6 +1250,8 @@ class ActiveInjectedAircraft:
     smooth_pitch: Optional[float] = None  # smoothed attitude (deg) for banked turns / climbs
     smooth_bank: Optional[float] = None
     ground_lock: float = 0.0  # 0..1 blend of rendered altitude onto the field elevation
+    on_ground_latch: bool = False  # sticky on-ground state (survives feed noise)
+    gear_down: Optional[bool] = None  # last commanded gear state (None = not yet sent)
     last_tick: float = 0.0  # monotonic time of last position write
     logged: bool = False  # first-write coordinates logged once (render diagnosis)
     att: Optional[object] = None  # AttitudeModel: pitch/bank + rotation, flare, derotation
@@ -1780,25 +1812,61 @@ class LiveTrafficInjector:
             agl = agl_ft(pose, flight.origin_elev_ft, flight.dest_elev_ft)
             elevs = [e for e in (flight.origin_elev_ft, flight.dest_elev_ft)
                      if e > -100.0]
-            # Broadened on-ground test: once the aircraft is low, level and
-            # no longer on a steep approach, it is on the runway -- even while
-            # still rolling out above 50 kt (the old gs-only gate let the
-            # noisy feed altitude show through the whole rollout).
-            on_ground = is_on_ground(pose, flight.origin_elev_ft,
-                                     flight.dest_elev_ft)
-            if (not on_ground and not active.att.flare and agl is not None
-                    and agl < 25.0 and pose.vs > -300.0 and gs_kt < 220.0):
+            # Determine on-ground ROBUSTLY. The feed altitude is noisy by
+            # tens of feet, so a plain "agl < X" test flips from frame to
+            # frame: that made the altitude blend oscillate (jitter on the
+            # ground roll) and bounce the aircraft on roll-out. We instead use
+            # only cues that are stable per feed segment, and otherwise HOLD
+            # the previous state:
+            #   * definite ground  : very low ground speed, or already landed
+            #   * definite airborne: flying the flare, or the NEXT sample is
+            #                        clearly higher than this one (lift-off) at
+            #                        a speed at which a climb is possible. The
+            #                        150 ft margin sits above the feed's
+            #                        altitude noise so a rolling aircraft cannot
+            #                        trip it.
+            climbing_ahead = (pose.next_alt is not None
+                              and pose.next_alt - pose.alt > 150.0
+                              and gs_kt > 80.0)
+            if (is_on_ground(pose, flight.origin_elev_ft, flight.dest_elev_ft)
+                    or active.att.landed):
                 on_ground = True
+            elif active.att.flare or climbing_ahead:
+                on_ground = False
+            else:
+                # Neither a confident ground nor air cue: HOLD the previous
+                # state. This is the key anti-jitter step -- while rolling at
+                # speed the feed altitude is pure noise, so we must not let a
+                # noisy agl/vs sample flip us frame to frame.
+                on_ground = active.on_ground_latch
+            active.on_ground_latch = on_ground
             field = (min(elevs, key=lambda e: abs(e - alt_model))
                      if elevs else None)
             if field is not None:
-                wants = 1.0 if (on_ground or active.att.landed) else 0.0
-                tau = 0.6 if wants > active.ground_lock else 1.4
+                wants = 1.0 if on_ground else 0.0
+                tau = 0.5 if wants > active.ground_lock else 1.0
                 active.ground_lock += ((wants - active.ground_lock)
                                        * _smooth_factor(dt, tau))
                 alt_ft = alt_model + (field - alt_model) * active.ground_lock
             else:
                 alt_ft = alt_model
+
+            # Landing gear: a frozen/teleported AI object never runs the sim's
+            # own gear logic, so we command it explicitly. Down on the ground
+            # and on approach, up in the climb and cruise, with hysteresis so
+            # it cannot flap. Retries until the sim accepts the event.
+            if on_ground or active.att.landed or active.att.flare:
+                want_gear = True
+            elif agl is not None and agl < 800.0:
+                want_gear = True
+            elif agl is not None and agl > 1200.0:
+                want_gear = False
+            else:
+                want_gear = (active.gear_down if active.gear_down is not None
+                             else True)
+            if active.gear_down != want_gear:
+                if self.sim.set_gear(active.object_id, want_gear):
+                    active.gear_down = want_gear
 
             # Freeze the object once so the AI brain/physics stops fighting our
             # writes. Coordinate writes only (PLANE LATITUDE etc), never Initial
