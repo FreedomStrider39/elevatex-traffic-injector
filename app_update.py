@@ -251,12 +251,18 @@ def install_and_restart(new_exe: str) -> None:
 
     old = exe + ".old"
     _silent_remove(old)
-    os.replace(exe, old)          # rename the running exe (allowed on Windows)
+    try:
+        os.replace(exe, old)      # rename the running exe (allowed on Windows)
+    except OSError as e:
+        raise UpdateError(
+            f"Could not rename the running app ({e.strerror or e}). "
+            "Close any other copy and try again, or install manually.") from e
     try:
         os.replace(new_exe, exe)
-    except Exception:
+    except Exception as e:
         os.replace(old, exe)      # put things back if the swap failed
-        raise
+        raise UpdateError(
+            "Could not place the new build. The old version has been kept.") from e
 
     try:
         subprocess.Popen([exe], close_fds=True)

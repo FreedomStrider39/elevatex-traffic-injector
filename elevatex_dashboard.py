@@ -1057,7 +1057,9 @@ class Dashboard:
 
     def _update_failed(self, message: str):
         if self._update_win is not None and self._update_win.winfo_exists():
-            self.upd_status.set(f"Update failed: {message}")
+            self.upd_status.set(
+                f"Update failed: {message} "
+                "You can still download it from the release page.")
             self.btn_upd_install.configure(state="normal",
                                            text="Retry download")
         self._log(f"[Update] {message}", "err")
