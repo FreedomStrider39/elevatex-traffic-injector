@@ -6,6 +6,7 @@ Clean dark-themed GUI for controlling the MSFS AI traffic injector.
 
 import os
 import json
+import math
 import queue
 import shutil
 import sys
@@ -87,24 +88,262 @@ def _save_username(name: str) -> None:
         pass
 
 
-# ── Palette (ElevateX brand: dark slate + elvtx-yellow) ──────────────────────
-BG       = "#060608"  # site background
-SURFACE  = "#141416"  # card surface
-HEADER_BG = "#0c0c0e" # header band
-BORDER   = "#222222"
-ACCENT   = "#faa307"  # --color-elvtx-yellow (brand)
-ACCENT_HOVER = "#ffae1a"
-ACCENT_FG    = "#060608"  # dark text on yellow
-GREEN    = "#3fb950"
-RED      = "#f87171"
-TEXT     = "#f4f6f9"
-MUTED    = "#99a1af"
-INFO     = "#a8b3c2"
+# ── Palette ──────────────────────────────────────────────────────────────────
+BG           = "#0B0C0E"   # window
+SURFACE      = "#121417"   # panels / cards
+HEADER_BG    = "#0B0C0E"
+BORDER       = "#23262C"   # hairline
+RAISED       = "#1A1D22"   # inputs, ghost buttons
+ACCENT       = "#F5A623"   # brand yellow
+ACCENT_HOVER = "#FFB43A"
+ACCENT_FG    = "#0B0C0E"
+GREEN        = "#4ADE80"
+RED          = "#FF6B6B"
+TEXT         = "#E8EAED"
+MUTED        = "#8A919B"
+INFO         = "#AEB6C2"
 
-FONT_UI    = ("Segoe UI", 10)
-FONT_BOLD  = ("Segoe UI", 10, "bold")
-FONT_TITLE = ("Segoe UI", 14, "bold")
-FONT_MONO  = ("Consolas", 9)
+FONT_UI     = ("Segoe UI", 10)
+FONT_BOLD   = ("Segoe UI", 10, "bold")
+FONT_TITLE  = ("Segoe UI", 15, "bold")
+FONT_LABEL  = ("Segoe UI", 8, "bold")
+FONT_SMALL  = ("Segoe UI", 9)
+FONT_TINY   = ("Segoe UI", 8)
+FONT_NUM    = ("Segoe UI", 20, "bold")
+FONT_MONO   = ("Consolas", 9)
+
+
+# ── small UI toolkit (rounded panels / pill buttons / steppers) ─────────────
+def _rounded_points(x1, y1, x2, y2, r, steps=8):
+    """Polygon points for a rectangle with rounded corners."""
+    r = max(0.0, min(r, (x2 - x1) / 2.0, (y2 - y1) / 2.0))
+    pts = []
+    for cx, cy, a0, a1 in ((x2 - r, y1 + r, -90, 0),
+                           (x2 - r, y2 - r, 0, 90),
+                           (x1 + r, y2 - r, 90, 180),
+                           (x1 + r, y1 + r, 180, 270)):
+        for i in range(steps + 1):
+            a = math.radians(a0 + (a1 - a0) * i / steps)
+            pts.extend((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return pts
+
+
+class RoundPanel(tk.Canvas):
+    """A flat panel with rounded corners and an embedded content frame."""
+
+    def __init__(self, master, *, fill=SURFACE, border=BORDER, radius=14,
+                 pad=16, **kw):
+        super().__init__(master, bg=master.cget("bg"), highlightthickness=0,
+                         bd=0, **kw)
+        self._fill, self._border = fill, border
+        self._radius, self._pad = radius, pad
+        self.body = tk.Frame(self, bg=fill)
+        self._win = self.create_window(0, 0, window=self.body, anchor="nw")
+        self._shape = None
+        self.bind("<Configure>", self._redraw)
+
+    def _redraw(self, _evt=None):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        pts = _rounded_points(0.5, 0.5, w - 0.5, h - 0.5, self._radius)
+        if self._shape is None:
+            self._shape = self.create_polygon(pts, fill=self._fill,
+                                              outline=self._border, width=1)
+            self.tag_lower(self._shape)
+        else:
+            self.coords(self._shape, *pts)
+        p = self._pad
+        self.coords(self._win, p, p)
+        self.itemconfigure(self._win, width=max(w - 2 * p, 1),
+                           height=max(h - 2 * p, 1))
+
+
+class PillButton(tk.Canvas):
+    """Flat rounded button with hover and a disabled state."""
+
+    def __init__(self, master, text="", command=None, *, bg=ACCENT,
+                 fg=ACCENT_FG, hover=None, disabled_bg=RAISED,
+                 disabled_fg=MUTED, font=FONT_BOLD, height=38, width=120,
+                 radius=10, border=None):
+        super().__init__(master, bg=master.cget("bg"), highlightthickness=0,
+                         bd=0, height=height, width=width, cursor="hand2")
+        self._text, self._command = text, command
+        self._bg, self._fg = bg, fg
+        self._hover = hover or bg
+        self._dbg, self._dfg = disabled_bg, disabled_fg
+        self._font, self._radius = font, radius
+        self._border = border
+        self._state = "normal"
+        self._hovering = False
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<ButtonRelease-1>", lambda _e: self._draw())
+
+    def _draw(self):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1:
+            w = int(self.cget("width"))
+        if h <= 1:
+            h = int(self.cget("height"))
+        self.delete("all")
+        fill = self._bg if self._state == "normal" else self._dbg
+        if self._state == "normal" and self._hovering:
+            fill = self._hover
+        fg = self._fg if self._state == "normal" else self._dfg
+        pts = _rounded_points(0.5, 0.5, w - 0.5, h - 0.5, self._radius)
+        self.create_polygon(pts, fill=fill, outline=self._border or fill,
+                            width=1)
+        self.create_text(w / 2, h / 2, text=self._text, fill=fg,
+                         font=self._font)
+
+    def _on_enter(self, _e=None):
+        self._hovering = True
+        self._draw()
+
+    def _on_leave(self, _e=None):
+        self._hovering = False
+        self._draw()
+
+    def _on_click(self, _e=None):
+        if self._state == "normal" and self._command:
+            self._command()
+
+    def configure(self, cnf=None, **kw):
+        text = kw.pop("text", None)
+        state = kw.pop("state", None)
+        command = kw.pop("command", None)
+        kw.pop("cursor", None)
+        if text is not None:
+            self._text = text
+        if command is not None:
+            self._command = command
+        if state is not None:
+            self._state = state
+            try:
+                super().configure(cursor="hand2" if state == "normal" else "arrow")
+            except Exception:
+                pass
+        if cnf or kw:
+            super().configure(cnf, **kw)
+        self._draw()
+
+    config = configure
+
+    def cget(self, key):
+        if key == "text":
+            return self._text
+        if key == "state":
+            return self._state
+        return super().cget(key)
+
+
+class SlimScrollbar(tk.Canvas):
+    """Minimal dark scrollbar: no arrows, no trough borders."""
+
+    def __init__(self, master, command, *, width=8, fill="#1B1E24",
+                 thumb="#3A4049", hover="#4A515B"):
+        super().__init__(master, width=width, bg=master.cget("bg"),
+                         highlightthickness=0, bd=0)
+        self._command = command
+        self._fill, self._thumb, self._hover = fill, thumb, hover
+        self._first, self._last = 0.0, 1.0
+        self._drag = None
+        self._thumb_id = None
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_drag", None))
+
+    def set(self, first, last):
+        try:
+            self._first, self._last = float(first), float(last)
+        except (TypeError, ValueError):
+            return
+        self._draw()
+
+    def _draw(self):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 2 or h < 2:
+            return
+        self.delete("all")
+        if self._last - self._first >= 0.999:
+            return  # everything fits: leave the background clean
+        self.create_rectangle(0, 0, w, h, fill=self._fill, outline="")
+        top = self._first * h
+        bottom = self._last * h
+        if bottom - top < 26:
+            mid = (top + bottom) / 2.0
+            top, bottom = mid - 13.0, mid + 13.0
+            top = max(0.0, top)
+            bottom = min(float(h), top + 26.0)
+        self._thumb_id = self.create_rectangle(1, top + 1, w - 1, bottom - 1,
+                                               fill=self._thumb, outline="")
+
+    def _on_press(self, evt):
+        h = max(self.winfo_height(), 1)
+        if self._thumb_id is not None:
+            x1, y1, x2, y2 = self.coords(self._thumb_id)
+            if y1 <= evt.y <= y2:
+                self._drag = evt.y - y1
+                return
+        frac = max(0.0, min(1.0, evt.y / h))
+        self._command("moveto", frac)
+
+    def _on_drag(self, evt):
+        if self._drag is None:
+            return
+        h = max(self.winfo_height(), 1)
+        frac = max(0.0, min(1.0, (evt.y - self._drag) / h))
+        self._command("moveto", frac)
+
+
+class Stepper(tk.Frame):
+    """Compact numeric field: −  [ 40 ]  +"""
+
+    def __init__(self, master, variable, lo, hi, step=1, width=128):
+        super().__init__(master, bg=master.cget("bg"), width=width, height=30)
+        self.pack_propagate(False)
+        self.var, self.lo, self.hi, self.step = variable, lo, hi, step
+
+        self.minus = PillButton(self, "−", self._dec, bg=RAISED, fg=TEXT,
+                                hover="#242830", height=30, width=30,
+                                radius=8, font=("Segoe UI", 12, "bold"))
+        self.minus.pack(side="left")
+        holder = tk.Frame(self, bg=RAISED, height=30,
+                          highlightthickness=1, highlightbackground=BORDER)
+        holder.pack(side="left", fill="x", expand=True, padx=6)
+        holder.pack_propagate(False)
+        self.entry = tk.Entry(holder, textvariable=self.var, justify="center",
+                              bg=RAISED, fg=TEXT, insertbackground=ACCENT,
+                              relief="flat", bd=0, font=FONT_UI,
+                              highlightthickness=0, width=4)
+        self.entry.pack(fill="both", expand=True)
+        self.entry.bind("<FocusOut>", lambda _e: self._commit())
+        self.entry.bind("<Return>", lambda _e: self._commit())
+        self.plus = PillButton(self, "+", self._inc, bg=RAISED, fg=TEXT,
+                               hover="#242830", height=30, width=30,
+                               radius=8, font=("Segoe UI", 12, "bold"))
+        self.plus.pack(side="left")
+
+    def _clamp(self, value):
+        try:
+            value = int(round(float(value)))
+        except (TypeError, ValueError):
+            value = self.lo
+        return max(self.lo, min(self.hi, value))
+
+    def _commit(self):
+        self.var.set(self._clamp(self.var.get()))
+
+    def _inc(self):
+        self.var.set(self._clamp(self.var.get() + self.step))
+
+    def _dec(self):
+        self.var.set(self._clamp(self.var.get() - self.step))
+
 
 
 # ── stdout / stderr redirector → queue ───────────────────────────────────────
@@ -179,8 +418,8 @@ class Dashboard:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("ElevateX Traffic Injector")
-        self.root.geometry("1040x900")
-        self.root.minsize(940, 760)
+        self.root.geometry("1180x800")
+        self.root.minsize(1040, 700)
         self.root.configure(bg=BG)
 
         self.log_q: queue.Queue = queue.Queue()
@@ -198,7 +437,6 @@ class Dashboard:
         self._build_header()
         self._build_stats()
         self._build_main()
-        self._build_log()
 
         # Folders left behind by a previous in-app update can be deleted now
         self._cleanup_leftovers()
@@ -220,318 +458,307 @@ class Dashboard:
         s = ttk.Style()
         s.theme_use("clam")
         s.configure(".", background=BG, foreground=TEXT, font=FONT_UI)
-        s.configure("TFrame", background=BG)
-        s.configure("Surface.TFrame", background=SURFACE)
-        s.configure("TLabel", background=BG, foreground=TEXT, font=FONT_UI)
-        s.configure("Muted.TLabel", background=BG, foreground=MUTED, font=FONT_UI)
-        s.configure("Card.TLabel", background=SURFACE, foreground=TEXT, font=FONT_UI)
-        s.configure("CardMuted.TLabel", background=SURFACE, foreground=MUTED, font=("Segoe UI", 9))
-        s.configure("Section.TLabel", background=SURFACE, foreground=MUTED,
-                    font=("Segoe UI", 9, "bold"))
-        s.configure("CardValue.TLabel", background=SURFACE, foreground=TEXT, font=("Segoe UI", 16, "bold"))
-        s.configure("CardAccent.TLabel", background=SURFACE, foreground=ACCENT, font=("Segoe UI", 16, "bold"))
-        s.configure("Title.TLabel", background=BG, foreground=TEXT, font=FONT_TITLE)
-        s.configure("Header.TLabel", background=HEADER_BG, foreground=TEXT, font=FONT_UI)
-        s.configure("HeaderMuted.TLabel", background=HEADER_BG, foreground=MUTED, font=("Segoe UI", 9))
 
-        # Buttons — START is brand yellow, STOP is a quiet dark-red
-        s.configure("Start.TButton", background=ACCENT, foreground=ACCENT_FG,
-                    font=("Segoe UI", 10, "bold"), padding=(0, 8))
-        s.map("Start.TButton", background=[("active", ACCENT_HOVER), ("disabled", "#1e1e22")],
-              foreground=[("disabled", MUTED)])
-        s.configure("Stop.TButton", background="#3a232c", foreground=RED,
-                    font=("Segoe UI", 10, "bold"), padding=(0, 8))
-        s.map("Stop.TButton", background=[("active", "#4d2c37"), ("disabled", "#1e1e22")],
-              foreground=[("disabled", MUTED)])
-        # Small ghost button (Clear log, folder picker)
-        s.configure("Ghost.TButton", background="#1e1e22", foreground=TEXT,
-                    font=("Segoe UI", 9), padding=(10, 4))
-        s.map("Ghost.TButton", background=[("active", "#2e3a52")],
+        # Aircraft table: borderless, roomy rows, muted uppercase headings.
+        s.configure("Treeview", background=SURFACE, fieldbackground=SURFACE,
+                    foreground=TEXT, font=("Segoe UI", 9), rowheight=30,
+                    borderwidth=0, relief="flat", bordercolor=SURFACE,
+                    lightcolor=SURFACE, darkcolor=SURFACE)
+        s.configure("Treeview.Heading", background=SURFACE, foreground=MUTED,
+                    font=("Segoe UI", 8, "bold"), relief="flat",
+                    padding=(10, 9), borderwidth=0, bordercolor=SURFACE,
+                    lightcolor=SURFACE, darkcolor=SURFACE)
+        s.map("Treeview", background=[("selected", "#1F2329")],
+              foreground=[("selected", TEXT)])
+        s.map("Treeview.Heading", background=[("active", SURFACE)],
               foreground=[("active", TEXT)])
 
-        # Treeview — monospace for FIDS-style alignment
-        s.configure("Treeview", background=SURFACE, fieldbackground=SURFACE,
-                    foreground=TEXT, font=("Consolas", 10), rowheight=26,
-                    borderwidth=0)
-        s.configure("Treeview.Heading", background="#141416", foreground=MUTED,
-                    font=("Segoe UI", 9, "bold"), relief="flat")
-        s.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", ACCENT_FG)])
-        s.map("Treeview.Heading", background=[("active", "#1e2940")])
+        # Slim scrollbar so it does not look like Windows 95.
+        try:
+            s.configure("Slim.Vertical.TScrollbar", background="#2A2E35",
+                        troughcolor=SURFACE, bordercolor=SURFACE,
+                        arrowcolor=MUTED, width=8, arrowsize=8,
+                        gripcount=0, relief="flat")
+            s.map("Slim.Vertical.TScrollbar",
+                  background=[("active", "#3A3F48")])
+        except Exception:
+            pass
 
-        # Spinbox
-        s.configure("TSpinbox", fieldbackground=SURFACE, background=SURFACE,
-                    foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER,
-                    lightcolor=BORDER, darkcolor=BORDER, padding=4)
-
-        # Entry (dark theme - default Windows Entry is white-on-white here)
-        s.configure("TEntry", fieldbackground="#0d1117", background=SURFACE,
-                    foreground=TEXT, insertcolor=TEXT, bordercolor=BORDER,
-                    lightcolor=BORDER, darkcolor=BORDER, padding=5)
-        s.map("TEntry", fieldbackground=[("focus", "#0d1117")],
-              foreground=[("focus", TEXT)])
+        try:
+            s.configure("Accent.Horizontal.TProgressbar", background=ACCENT,
+                        troughcolor=RAISED, bordercolor=RAISED,
+                        lightcolor=ACCENT, darkcolor=ACCENT, thickness=6)
+        except Exception:
+            pass
 
     # ── header ──────────────────────────────────────────────────────────────
     def _build_header(self):
-        hdr = tk.Frame(self.root, bg=HEADER_BG, bd=0, highlightthickness=1,
-                       highlightbackground=BORDER)
-        hdr.pack(fill="x", padx=0, pady=0)
+        hdr = tk.Frame(self.root, bg=BG)
+        hdr.pack(fill="x")
 
-        inner = tk.Frame(hdr, bg=HEADER_BG)
-        inner.pack(fill="x", padx=18, pady=12)
+        inner = tk.Frame(hdr, bg=BG)
+        inner.pack(fill="x", padx=22, pady=(16, 14))
 
-        brand = tk.Frame(inner, bg=HEADER_BG)
+        brand = tk.Frame(inner, bg=BG)
         brand.pack(side="left")
         try:
-            import os as _os
             if hasattr(sys, "_MEIPASS"):
-                _icon_path = _os.path.join(sys._MEIPASS, "icon.png")
+                _icon_path = os.path.join(sys._MEIPASS, "icon.png")
             else:
-                _icon_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "icon.png")
-            if not _os.path.exists(_icon_path):
-                _icon_path = _os.path.join(_os.path.dirname(sys.executable), "icon.png")
-            _logo = tk.PhotoImage(file=_icon_path).subsample(8, 8)  # 256 -> 32px
-            _logo_lbl = tk.Label(brand, image=_logo, bg=HEADER_BG)
+                _icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "icon.png")
+            if not os.path.exists(_icon_path):
+                _icon_path = os.path.join(os.path.dirname(sys.executable),
+                                          "icon.png")
+            _logo = tk.PhotoImage(file=_icon_path).subsample(8, 8)
+            _logo_lbl = tk.Label(brand, image=_logo, bg=BG)
             _logo_lbl.image = _logo
-            _logo_lbl.pack(side="left", padx=(0, 8))
+            _logo_lbl.pack(side="left", padx=(0, 10))
         except Exception:
             pass
-        tk.Label(brand, text="ELEVATEX", font=("Segoe UI", 16, "bold"),
-                 bg=HEADER_BG, fg=ACCENT).pack(side="left")
-        tk.Label(brand, text="  LIVE TRAFFIC", font=("Segoe UI", 12),
-                 bg=HEADER_BG, fg=TEXT).pack(side="left")
+
+        tk.Label(brand, text="ElevateX", font=("Segoe UI", 15, "bold"),
+                 bg=BG, fg=TEXT).pack(side="left")
+        tk.Label(brand, text="Traffic Injector", font=("Segoe UI", 11),
+                 bg=BG, fg=MUTED).pack(side="left", padx=(8, 0))
+
         self.version_lbl = tk.Label(brand, text=f"v{CURRENT_VERSION}",
-                                    font=("Segoe UI", 8), bg=HEADER_BG,
-                                    fg=MUTED, cursor="hand2")
-        self.version_lbl.pack(side="left", padx=(10, 0))
+                                    font=FONT_TINY, bg=RAISED, fg=MUTED,
+                                    padx=7, pady=2, cursor="hand2")
+        self.version_lbl.pack(side="left", padx=(12, 0))
         self.version_lbl.bind("<Button-1>", self._manual_check)
 
-        self.status_var = tk.StringVar(value="STOPPED")
-        self.status_lbl = tk.Label(inner, textvariable=self.status_var,
-                                   font=("Segoe UI", 10, "bold"),
-                                   bg="#1e1e22", fg=RED, padx=12, pady=3)
-        self.status_lbl.pack(side="right")
+        # Status pill (dot + label)
+        self.status_var = tk.StringVar(value="Stopped")
+        pill = tk.Frame(inner, bg=RAISED, padx=12, pady=5)
+        pill.pack(side="right")
+        self.status_dot = tk.Canvas(pill, width=8, height=8, bg=RAISED,
+                                    highlightthickness=0)
+        self._dot = self.status_dot.create_oval(0, 0, 8, 8, fill=MUTED,
+                                                outline="")
+        self.status_dot.pack(side="left", padx=(0, 7))
+        self.status_lbl = tk.Label(pill, textvariable=self.status_var,
+                                   font=("Segoe UI", 9, "bold"),
+                                   bg=RAISED, fg=MUTED)
+        self.status_lbl.pack(side="left")
 
         # Update pill — hidden until a newer release is found
-        self.update_btn = tk.Button(
-            inner, text="↑ Update", command=self._show_update_dialog,
-            bg=ACCENT, fg=ACCENT_FG, activebackground=ACCENT_HOVER,
-            activeforeground=ACCENT_FG, bd=0, relief="flat", cursor="hand2",
-            font=("Segoe UI", 9, "bold"), padx=12, pady=3)
+        self.update_btn = PillButton(inner, text="Update available",
+                                     command=self._show_update_dialog,
+                                     bg=ACCENT, fg=ACCENT_FG,
+                                     hover=ACCENT_HOVER, height=30, width=160,
+                                     radius=15, font=("Segoe UI", 9, "bold"))
+
+        tk.Frame(self.root, bg=BORDER, height=1).pack(fill="x")
 
     # ── stats cards ─────────────────────────────────────────────────────────
     def _build_stats(self):
         row = tk.Frame(self.root, bg=BG)
-        row.pack(fill="x", padx=18, pady=(14, 4))
+        row.pack(fill="x", padx=22, pady=(18, 0))
 
         self.stat_vars = {}
         cards = [
-            ("msfs",   "MSFS",           "—"),
-            ("active", "ElevateX Aircraft", "0"),
-            ("feed",   "Nearby Flights", "0"),
+            ("msfs",   "MSFS",             "—",      TEXT),
+            ("active", "ELEVATEX AIRCRAFT", "0",     ACCENT),
+            ("feed",   "NEARBY FLIGHTS",    "0",     TEXT),
         ]
-        for key, title, default in cards:
-            card = tk.Frame(row, bg=SURFACE, bd=0, highlightthickness=1,
-                            highlightbackground=BORDER)
-            card.pack(side="left", fill="both", expand=True, padx=(0, 10))
-
-            if key == "active":
-                # thin brand-accent strip on top of the hero card
-                tk.Frame(card, bg=ACCENT, height=2)\
-                    .pack(fill="x", side="top")
-            ttk.Label(card, text=title.upper(), style="CardMuted.TLabel")\
-                .pack(anchor="w", padx=12, pady=(8, 0))
+        for key, title, default, colour in cards:
+            card = RoundPanel(row, height=86, pad=16)
+            card.pack(side="left", fill="x", expand=True,
+                      padx=(0, 12) if key != "feed" else 0)
+            tk.Label(card.body, text=title, font=FONT_LABEL, bg=SURFACE,
+                     fg=MUTED).pack(anchor="w")
             var = tk.StringVar(value=default)
-            style = "CardAccent.TLabel" if key == "active" else "CardValue.TLabel"
-            ttk.Label(card, textvariable=var, style=style)\
-                .pack(anchor="w", padx=12, pady=(0, 8))
+            tk.Label(card.body, textvariable=var, font=FONT_NUM, bg=SURFACE,
+                     fg=colour).pack(anchor="w", pady=(2, 0))
             self.stat_vars[key] = var
 
     # ── main area (settings + table) ────────────────────────────────────────
     def _build_main(self):
         main = tk.Frame(self.root, bg=BG)
-        main.pack(fill="both", expand=True, padx=18, pady=8)
+        main.pack(fill="both", expand=True, padx=22, pady=(16, 18))
 
-        # ── left: control sidebar (scrollable; actions stay pinned) ──
-        left = tk.Frame(main, bg=SURFACE, bd=0, highlightthickness=1,
-                        highlightbackground=BORDER, width=256)
-        left.pack(side="left", fill="y", padx=(0, 10))
+        # ── left: control sidebar ──
+        left = RoundPanel(main, width=300, pad=18)
+        left.pack(side="left", fill="y")
         left.pack_propagate(False)
+        side = left.body
 
-        # Actions pinned to the bottom (packed first so they stay there)
-        btn_frame = tk.Frame(left, bg=SURFACE)
-        btn_frame.pack(side="bottom", fill="x", padx=14, pady=(12, 14))
+        # Actions pinned to the bottom
+        btn_frame = tk.Frame(side, bg=SURFACE)
+        btn_frame.pack(side="bottom", fill="x")
 
-        self.btn_start = ttk.Button(btn_frame, text="▶  START", style="Start.TButton",
-                                    command=self._on_start)
-        self.btn_start.pack(fill="x", pady=(0, 6))
+        self.btn_stop = PillButton(btn_frame, text="Stop", command=self._on_stop,
+                                   bg=RAISED, fg=TEXT, hover="#242830",
+                                   disabled_bg=RAISED, disabled_fg="#4A4F57",
+                                   height=42, radius=11, font=FONT_BOLD)
+        self.btn_stop.pack(side="bottom", fill="x", pady=(8, 0))
+        self.btn_stop.configure(state="disabled")
 
-        self.btn_stop = ttk.Button(btn_frame, text="■  STOP", style="Stop.TButton",
-                                   command=self._on_stop, state="disabled")
-        self.btn_stop.pack(fill="x")
+        self.btn_start = PillButton(btn_frame, text="Start injection",
+                                    command=self._on_start, bg=ACCENT,
+                                    fg=ACCENT_FG, hover=ACCENT_HOVER,
+                                    height=42, radius=11,
+                                    font=("Segoe UI", 10, "bold"))
+        self.btn_start.pack(side="bottom", fill="x")
 
-        # Scrollable content: sections scroll when the window is short,
-        # the START/STOP buttons above always stay visible.
-        side_scroll = tk.Canvas(left, bg=SURFACE, highlightthickness=0)
-        side_vsb = ttk.Scrollbar(left, orient="vertical",
-                                 command=side_scroll.yview)
-        side_scroll.configure(yscrollcommand=side_vsb.set)
-        side_vsb.pack(side="right", fill="y")
-        side_scroll.pack(side="left", fill="both", expand=True)
-        content = tk.Frame(side_scroll, bg=SURFACE)
-        content_win = side_scroll.create_window((0, 0), window=content,
-                                                anchor="nw")
+        content = tk.Frame(side, bg=SURFACE)
+        content.pack(side="top", fill="both", expand=True)
 
-        def _sync_side_scroll(_evt=None):
-            try:
-                side_scroll.configure(scrollregion=side_scroll.bbox("all"))
-                side_scroll.itemconfig(content_win,
-                                       width=side_scroll.winfo_width())
-            except Exception:
-                pass
-        content.bind("<Configure>", _sync_side_scroll)
-        side_scroll.bind("<Configure>", _sync_side_scroll)
+        def section(text):
+            tk.Label(content, text=text, font=FONT_LABEL, bg=SURFACE,
+                     fg=MUTED).pack(anchor="w", pady=(0, 10))
 
-        def _side_wheel(evt):
-            # Only scroll the sidebar when the pointer is over it,
-            # so the aircraft table keeps its own behaviour.
-            try:
-                w = self.root.winfo_containing(evt.x_root, evt.y_root)
-                if w is not None and str(w).startswith(str(left)):
-                    side_scroll.yview_scroll(-1 * (evt.delta // 120),
-                                             "units")
-            except Exception:
-                pass
-        self.root.bind_all("<MouseWheel>", _side_wheel, add="+")
+        def divider():
+            tk.Frame(content, bg=BORDER, height=1).pack(fill="x", pady=14)
 
-        # ── TRAFFIC section ──
-        ttk.Label(content, text="TRAFFIC", style="Section.TLabel")\
-            .pack(anchor="w", padx=14, pady=(14, 8))
+        # ── CONFIGURATION ──
+        section("CONFIGURATION")
 
-        self.var_radius = tk.DoubleVar(value=40)
-        self.var_max    = tk.DoubleVar(value=40)
+        self.var_radius = tk.IntVar(value=40)
+        self.var_max = tk.IntVar(value=40)
+        for label, var, frm, to in [("Search radius", self.var_radius, 5, 200),
+                                    ("Max aircraft", self.var_max, 1, 200)]:
+            row = tk.Frame(content, bg=SURFACE)
+            row.pack(fill="x", pady=(0, 8))
+            tk.Label(row, text=label, font=FONT_SMALL, bg=SURFACE,
+                     fg=TEXT).pack(side="left")
+            Stepper(row, var, frm, to).pack(side="right")
 
-        for label, var, frm, to in [
-            ("Radius (NM)",       self.var_radius, 5, 200),
-            ("Max Traffic",       self.var_max,    1, 200),
-        ]:
-            ttk.Label(content, text=label, style="Card.TLabel")\
-                .pack(anchor="w", padx=14, pady=(4, 0))
-            spin = ttk.Spinbox(content, from_=frm, to=to, textvariable=var,
-                               width=10, increment=1)
-            spin.pack(anchor="w", padx=14, pady=(2, 4))
+        tk.Label(content, text="NM · auto tracking at 30 Hz", font=FONT_TINY,
+                 bg=SURFACE, fg=MUTED).pack(anchor="w", pady=(0, 2))
 
-        ttk.Label(content, text="Tracking: auto (30 Hz smoothed)",
-                  style="CardMuted.TLabel", wraplength=208)\
-            .pack(anchor="w", padx=14, pady=(8, 0))
+        divider()
 
-        # ── PILOT section ──
-        ttk.Label(content, text="PILOT", style="Section.TLabel")\
-            .pack(anchor="w", padx=14, pady=(14, 6))
-        ttk.Label(content, text="ElevateX Username",
-                  style="Card.TLabel")\
-            .pack(anchor="w", padx=14, pady=(0, 0))
+        # ── PILOT ──
+        section("PILOT")
+        tk.Label(content, text="ElevateX username", font=FONT_SMALL,
+                 bg=SURFACE, fg=TEXT).pack(anchor="w", pady=(0, 6))
+
+        entry_panel = tk.Frame(content, bg=RAISED, highlightthickness=1,
+                               highlightbackground=BORDER,
+                               highlightcolor=ACCENT)
+        entry_panel.pack(fill="x")
         self.var_user_id = tk.StringVar(value=_load_saved_username())
-        uid_entry = tk.Entry(content, textvariable=self.var_user_id, width=20,
-                             bg=BG, fg=TEXT, insertbackground=ACCENT,
-                             relief="flat", bd=0, highlightthickness=1,
-                             highlightbackground=BORDER, highlightcolor=ACCENT,
-                             font=FONT_UI)
-        uid_entry.pack(anchor="w", padx=14, pady=(4, 2), ipady=5)
-        # Saved indicator (checkmark when username is persisted)
+        uid_entry = tk.Entry(entry_panel, textvariable=self.var_user_id,
+                             bg=RAISED, fg=TEXT, insertbackground=ACCENT,
+                             relief="flat", bd=0, font=FONT_UI,
+                             highlightthickness=0)
+        uid_entry.pack(fill="x", padx=10, pady=7)
+
+        status_row = tk.Frame(content, bg=SURFACE)
+        status_row.pack(fill="x", pady=(6, 0))
         self.var_user_saved = tk.StringVar(
-            value="✓ Saved" if _load_saved_username() else "")
-        ttk.Label(content, textvariable=self.var_user_saved,
-                  style="CardMuted.TLabel")\
-            .pack(anchor="w", padx=14, pady=(0, 0))
-        # Live verification status (updated every tick while running)
+            value="Saved" if _load_saved_username() else "")
+        tk.Label(status_row, textvariable=self.var_user_saved, font=FONT_TINY,
+                 bg=SURFACE, fg=GREEN).pack(side="left")
         self.var_user_status = tk.StringVar()
-        self.user_status_lbl = ttk.Label(content, textvariable=self.var_user_status,
-                                         style="CardMuted.TLabel", wraplength=208)
-        self.user_status_lbl.pack(anchor="w", padx=14, pady=(0, 2))
-        ttk.Label(content,
-                  text="Your aircraft is excluded only while you're flying on ElevateX. Leave empty to inject all traffic.",
-                  style="CardMuted.TLabel", wraplength=208)\
-            .pack(anchor="w", padx=14, pady=(2, 0))
+        self.user_status_lbl = tk.Label(content,
+                                        textvariable=self.var_user_status,
+                                        font=FONT_TINY, bg=SURFACE, fg=MUTED,
+                                        anchor="w", justify="left",
+                                        wraplength=248)
+        self.user_status_lbl.pack(anchor="w", pady=(2, 0))
 
-        # ── MODELS section ──
-        ttk.Label(content, text="FSLTL MODELS", style="Section.TLabel")\
-            .pack(anchor="w", padx=14, pady=(14, 6))
+        tk.Label(content,
+                 text="Your own aircraft is excluded while you fly on "
+                      "ElevateX. Leave empty to inject all traffic.",
+                 font=FONT_TINY, bg=SURFACE, fg=MUTED, justify="left",
+                 wraplength=248).pack(anchor="w", pady=(6, 0))
+
+        divider()
+
+        # ── MODELS ──
+        section("FSLTL MODELS")
         self.cat_var = tk.StringVar(value=self.catalog_status)
-        ttk.Label(content, textvariable=self.cat_var, style="CardMuted.TLabel",
-                  wraplength=208)\
-            .pack(anchor="w", padx=14, pady=(0, 4))
+        tk.Label(content, textvariable=self.cat_var, font=FONT_TINY,
+                 bg=SURFACE, fg=MUTED, justify="left", wraplength=248)\
+            .pack(anchor="w", pady=(0, 8))
 
-        # Manual Community-folder picker (also used when auto-search fails)
-        self.btn_folder = ttk.Button(content, text="📁  Community folder…",
-                                     style="Ghost.TButton",
-                                     command=self._on_pick_folder)
-        self.btn_folder.pack(anchor="w", padx=14, pady=(0, 4))
+        self.btn_folder = PillButton(content, text="Choose folder",
+                                     command=self._on_pick_folder,
+                                     bg=RAISED, fg=TEXT, hover="#242830",
+                                     height=30, width=140, radius=8,
+                                     font=FONT_SMALL)
+        self.btn_folder.pack(anchor="w")
 
-        # ── right: aircraft table ──
-        right = tk.Frame(main, bg=SURFACE, bd=0, highlightthickness=1,
-                         highlightbackground=BORDER)
-        right.pack(side="left", fill="both", expand=True)
+        # ── right: table + activity ──
+        right = tk.Frame(main, bg=BG)
+        right.pack(side="left", fill="both", expand=True, padx=(16, 0))
 
-        thead = tk.Frame(right, bg=SURFACE)
-        thead.pack(fill="x", padx=12, pady=(10, 4))
-        ttk.Label(thead, text="LIVE AIRCRAFT", style="Section.TLabel")\
-            .pack(side="left")
+        table_card = RoundPanel(right, pad=0)
+        table_card.pack(fill="both", expand=True)
+        tbl = table_card.body
+
+        thead = tk.Frame(tbl, bg=SURFACE)
+        thead.pack(fill="x", padx=18, pady=(13, 9))
+        tk.Label(thead, text="Live aircraft", font=("Segoe UI", 11, "bold"),
+                 bg=SURFACE, fg=TEXT).pack(side="left")
         self.tree_count = tk.StringVar(value="")
-        ttk.Label(thead, textvariable=self.tree_count, style="CardMuted.TLabel")\
-            .pack(side="right")
+        tk.Label(thead, textvariable=self.tree_count, font=FONT_SMALL,
+                 bg=SURFACE, fg=MUTED).pack(side="right")
 
-        cols = ("callsign", "type", "airline", "dist", "alt", "gs", "model", "status")
-        self.tree = ttk.Treeview(right, columns=cols, show="headings", selectmode="none")
-        # Total fixed widths ≈ 520 px; MODEL stretches to fill the rest
+        tk.Frame(tbl, bg=BORDER, height=1).pack(fill="x")
+
+        tree_wrap = tk.Frame(tbl, bg=SURFACE)
+        tree_wrap.pack(fill="both", expand=True, padx=6, pady=(6, 10))
+
+        cols = ("callsign", "type", "airline", "dist", "alt", "gs", "model",
+                "status")
+        self.tree = ttk.Treeview(tree_wrap, columns=cols, show="headings",
+                                 selectmode="none", style="Treeview")
         headings = {
-            "callsign": ("CALLSIGN",    90, "w"),
-            "type":     ("TYPE",        50, "center"),
-            "airline":  ("AIRLINE",     70, "w"),
-            "dist":     ("DIST",        55, "e"),
-            "alt":      ("ALT",         60, "e"),
-            "gs":       ("GS",          50, "e"),
-            "model":    ("MODEL",      160, "w"),
-            "status":   ("STATUS",      65, "center"),
+            "callsign": ("CALLSIGN", 116, "w"),
+            "type":     ("TYPE",      62, "center"),
+            "airline":  ("AIRLINE",   82, "w"),
+            "dist":     ("DIST",      62, "e"),
+            "alt":      ("ALT",       74, "e"),
+            "gs":       ("GS",        56, "e"),
+            "model":    ("MODEL",    180, "w"),
+            "status":   ("STATUS",    76, "center"),
         }
         for cid, (text, width, anchor) in headings.items():
-            self.tree.heading(cid, text=text)
+            self.tree.heading(cid, text=text, anchor=anchor)
             self.tree.column(cid, width=width, anchor=anchor,
-                             stretch=(cid == "model"), minwidth=0)
-        self.tree.tag_configure("odd", background="#1f2940")
+                             stretch=(cid == "model"), minwidth=60)
+        self.tree.tag_configure("odd", background="#16191E")
+        self.tree.tag_configure("pending", foreground=MUTED)
 
-        vsb = ttk.Scrollbar(right, orient="vertical", command=self.tree.yview)
-        hsb = ttk.Scrollbar(right, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        self.tree.pack(side="top", fill="both", expand=True, padx=(12, 0), pady=(0, 0))
-        hsb.pack(side="bottom", fill="x", padx=(12, 0), pady=(0, 2))
-        vsb.pack(side="right", fill="y", pady=(0, 10), padx=(0, 10))
+        vsb = SlimScrollbar(tree_wrap, command=self.tree.yview, width=8)
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y", pady=(0, 4))
+        self.tree.pack(side="left", fill="both", expand=True)
 
-    # ── log console ─────────────────────────────────────────────────────────
-    def _build_log(self):
-        frame = tk.Frame(self.root, bg=SURFACE, bd=0, highlightthickness=1,
-                         highlightbackground=BORDER)
-        frame.pack(fill="x", padx=18, pady=(0, 14))
+        self.tree_empty = tk.Label(tree_wrap, text="Waiting for traffic…",
+                                   font=FONT_SMALL, bg=SURFACE, fg=MUTED)
+        self.tree_empty.place(relx=0.5, rely=0.5, anchor="center")
 
-        loghead = tk.Frame(frame, bg=SURFACE)
-        loghead.pack(fill="x", padx=12, pady=(8, 0))
-        ttk.Label(loghead, text="LOG", style="Section.TLabel")\
-            .pack(side="left")
-        ttk.Button(loghead, text="Clear", style="Ghost.TButton",
-                   command=self._clear_log).pack(side="right")
+        log_card = RoundPanel(right, height=170, pad=0)
+        log_card.pack(fill="x", pady=(16, 0))
+        logbox = log_card.body
 
-        self.log_text = tk.Text(frame, height=6, bg=SURFACE, fg=TEXT,
-                                 font=FONT_MONO, insertbackground=TEXT,
-                                 selectbackground=ACCENT, selectforeground=ACCENT_FG,
-                                relief="flat", bd=0, state="disabled",
-                                wrap="word")
-        self.log_text.pack(fill="x", padx=12, pady=(4, 12))
+        loghead = tk.Frame(logbox, bg=SURFACE)
+        loghead.pack(fill="x", padx=18, pady=(12, 8))
+        tk.Label(loghead, text="Activity", font=("Segoe UI", 11, "bold"),
+                 bg=SURFACE, fg=TEXT).pack(side="left")
+        PillButton(loghead, text="Clear", command=self._clear_log, bg=RAISED,
+                   fg=MUTED, hover="#242830", height=24, width=64, radius=7,
+                   font=FONT_TINY).pack(side="right")
 
-        # Tag colours for log lines
+        self.log_text = tk.Text(logbox, height=5, bg=SURFACE, fg=INFO,
+                                font=FONT_MONO, insertbackground=TEXT,
+                                selectbackground=ACCENT,
+                                selectforeground=ACCENT_FG, relief="flat",
+                                bd=0, state="disabled", wrap="word",
+                                padx=18, pady=0, spacing1=1, spacing3=1)
+        self.log_text.pack(fill="both", expand=True, pady=(0, 12))
+
         self.log_text.tag_configure("err", foreground=RED)
         self.log_text.tag_configure("ok", foreground=GREEN)
         self.log_text.tag_configure("info", foreground=INFO)
         self.log_text.tag_configure("warn", foreground=ACCENT)
         self.log_text.tag_configure("dim", foreground=MUTED)
+
 
     def _clear_log(self):
         try:
@@ -611,6 +838,14 @@ class Dashboard:
                          args=(picked,), daemon=True).start()
 
     # ── button handlers ─────────────────────────────────────────────────────
+    def _set_status(self, text: str, colour: str):
+        try:
+            self.status_var.set(text)
+            self.status_lbl.configure(fg=colour)
+            self.status_dot.itemconfigure(self._dot, fill=colour)
+        except Exception:
+            pass
+
     def _on_start(self):
         if self.runner.running or self.catalog is None:
             return
@@ -625,25 +860,28 @@ class Dashboard:
         self._log("Starting injector…", "info")
         uname = self.var_user_id.get().strip()
         _save_username(uname)
-        self.var_user_saved.set("✓ Saved" if uname else "")
+        self.var_user_saved.set("Saved" if uname else "")
+        try:
+            radius = float(self.var_radius.get())
+            max_ac = float(self.var_max.get())
+        except Exception:
+            radius, max_ac = 40.0, 40.0
         self.runner.start(
             catalog=self.catalog,
-            radius=self.var_radius.get(),
-            max_ac=self.var_max.get(),
+            radius=radius,
+            max_ac=max_ac,
             my_user_id=uname,
         )
         self.btn_start.configure(state="disabled")
         self.btn_stop.configure(state="normal")
-        self.status_var.set("RUNNING")
-        self.status_lbl.configure(fg=GREEN)
+        self._set_status("Running", GREEN)
 
     def _on_stop(self):
         self._log("Stopping injector…", "warn")
         self.runner.stop()
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
-        self.status_var.set("STOPPED")
-        self.status_lbl.configure(fg=RED)
+        self._set_status("Stopped", MUTED)
         self.var_user_status.set("")
 
     # ── log helper ──────────────────────────────────────────────────────────
@@ -731,14 +969,13 @@ class Dashboard:
                 self.var_user_status.set("… Checking live feed…")
             # Refresh aircraft table
             self._refresh_table(inj, actives, feed_map)
-        elif inj and not self.runner.running and self.status_var.get() == "RUNNING":
+        elif inj and not self.runner.running and self.status_var.get() == "Running":
             # Worker died unexpectedly (e.g. SimConnect connect failed):
             # unstick the UI instead of sitting on an empty list.
             self._log("[Error] Injector stopped unexpectedly - see log above. Check MSFS is running and in a flight.", "err")
             self.btn_start.configure(state="normal")
             self.btn_stop.configure(state="disabled")
-            self.status_var.set("STOPPED")
-            self.status_lbl.configure(fg=RED)
+            self._set_status("Stopped", RED)
             self.stat_vars["msfs"].set("—")
             self.stat_vars["active"].set("0")
         elif not self.runner.running:
@@ -765,6 +1002,13 @@ class Dashboard:
                              active.container_title[:28],
                              "Live" if active.object_id else "Pend"))
         rows.sort(key=lambda r: float(r[4]))
+        try:
+            if rows:
+                self.tree_empty.place_forget()
+            else:
+                self.tree_empty.place(relx=0.5, rely=0.5, anchor="center")
+        except Exception:
+            pass
         n_live = sum(1 for r in rows if r[8] == "Live")
         n_pending = len(rows) - n_live
         if n_pending:
@@ -784,6 +1028,8 @@ class Dashboard:
         for idx, r in enumerate(rows):
             display = r[1:]
             tags = ("odd",) if idx % 2 else ()
+            if r[8] != "Live":
+                tags = tags + ("pending",)
             if r[0] in current:
                 self.tree.item(r[0], values=display, tags=tags)
             else:
@@ -899,9 +1145,17 @@ class Dashboard:
         self._update_cancel = False
         win.title(f"Update available - v{info['version']}")
         win.configure(bg=BG)
-        win.geometry("700x600")
-        win.minsize(620, 480)
+        win.geometry("720x700")
+        win.minsize(640, 560)
         win.transient(self.root)
+        try:
+            win.update_idletasks()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - 720) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - 700) // 2
+            win.geometry(f"720x700+{max(0, x)}+{max(0, y)}")
+            _enable_dark_titlebar(win)
+        except Exception:
+            pass
         try:
             win.iconphoto(False, self.root._app_icon)
         except Exception:
@@ -923,8 +1177,7 @@ class Dashboard:
                         highlightthickness=1, highlightbackground=BORDER,
                         wrap="word", font=("Segoe UI", 9), padx=12, pady=10,
                         insertbackground=TEXT, selectbackground="#2b3442")
-        vsb = ttk.Scrollbar(notes_wrap, orient="vertical",
-                            command=notes.yview)
+        vsb = SlimScrollbar(notes_wrap, command=notes.yview, width=8)
         notes.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         notes.pack(side="left", fill="both", expand=True)
@@ -940,20 +1193,24 @@ class Dashboard:
         tk.Label(foot, textvariable=self.upd_status, font=("Segoe UI", 9),
                  bg=BG, fg=MUTED).pack(anchor="w", pady=(0, 6))
         self.upd_prog = ttk.Progressbar(foot, mode="determinate",
-                                        maximum=100, value=0)
+                                        maximum=100, value=0,
+                                        style="Accent.Horizontal.TProgressbar")
         self.upd_prog.pack(fill="x", pady=(0, 12))
 
         btns = tk.Frame(foot, bg=BG)
         btns.pack(fill="x")
-        ttk.Button(btns, text="Later", style="Ghost.TButton",
-                   command=self._close_update_dialog).pack(side="right")
-        ttk.Button(btns, text="Release notes", style="Ghost.TButton",
-                   command=lambda: self._open_url(info["url"]))\
-            .pack(side="right", padx=(0, 8))
-        self.btn_upd_install = ttk.Button(
-            btns, text="Download & install", style="Start.TButton",
-            command=self._install_update)
-        self.btn_upd_install.pack(side="left", ipadx=10)
+        PillButton(btns, text="Later", command=self._close_update_dialog,
+                   bg=RAISED, fg=TEXT, hover="#242830", height=34, width=84,
+                   radius=9, font=FONT_SMALL).pack(side="right")
+        PillButton(btns, text="Release notes",
+                   command=lambda: self._open_url(info["url"]),
+                   bg=RAISED, fg=TEXT, hover="#242830", height=34, width=124,
+                   radius=9, font=FONT_SMALL).pack(side="right", padx=(0, 8))
+        self.btn_upd_install = PillButton(
+            btns, text="Download & install", command=self._install_update,
+            bg=ACCENT, fg=ACCENT_FG, hover=ACCENT_HOVER, height=34, width=170,
+            radius=9, font=FONT_BOLD)
+        self.btn_upd_install.pack(side="left")
 
         tip = ("The app closes and restarts itself when the download is "
                "verified." if app_update.is_frozen() else
@@ -1098,8 +1355,28 @@ class Dashboard:
 
 
 # ── entry point ──────────────────────────────────────────────────────────────
+def _enable_dark_titlebar(root):
+    """Ask DWM for the dark window frame (Windows 10 1809+); ignore failures."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        root.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        enabled = ctypes.c_int(1)
+        for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (20, then 19)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(enabled),
+                    ctypes.sizeof(enabled)) == 0:
+                break
+    except Exception:
+        pass
+
+
 def main():
     root = tk.Tk()
+    root.title("ElevateX Traffic Injector")
+    root.configure(bg=BG)
     try:
         _icon_file = os.path.join(
             getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))),
@@ -1110,7 +1387,18 @@ def main():
             root._app_icon = _app_icon  # keep reference so Tk doesn't GC it
     except Exception:
         pass
+
     Dashboard(root)
+    _enable_dark_titlebar(root)
+
+    # Centre the window on the current screen (and never open off-screen).
+    root.update_idletasks()
+    w = max(root.winfo_reqwidth(), 1180)
+    h = max(root.winfo_reqheight(), 800)
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    w, h = min(w, sw - 40), min(h, sh - 80)
+    root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2 - 24)}")
+
     root.mainloop()
 
 

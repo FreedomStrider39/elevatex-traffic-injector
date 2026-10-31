@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.9
+﻿ElevateX Live Traffic Injector v1.10
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -54,12 +54,37 @@ header. It shows the release notes, downloads the package, verifies it
 against the published SHA-256, swaps the running EXE and restarts itself.
 Click the version number next to the logo to check manually at any time.
 
-Known bugs (v1.9)
+Known bugs (v1.10)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is still being tuned. The flight-path angle now uses the corrected
   speed unit (see below), which should already make it noticeably
   closer to the real attitude.
+
+New in v1.10
+------------
+- Fresh dashboard layout: the whole interface was rebuilt to look like a
+  modern desktop app instead of a 2010 console.
+    * near-black canvas with rounded, borderless panels instead of boxes
+      with hard 1px outlines;
+    * a compact header with the wordmark, a clickable version chip and a
+      status pill whose dot turns green while injecting;
+    * three summary cards (MSFS, aircraft, nearby flights) with large
+      numbers and no visual clutter;
+    * settings moved to a fixed sidebar with proper numeric steppers
+      (- / +) instead of default Windows spin boxes and a scrollbar;
+    * the aircraft table uses roomier rows, muted uppercase headings,
+      an alternating row tint and a subtle "waiting for traffic" state;
+    * a slim, dark scrollbar that disappears entirely when the list fits,
+      and no horizontal scrollbar at all - columns are sized to the panel;
+    * the activity log is now a card at the bottom with a quiet Clear
+      button instead of a bordered box;
+    * the Windows title bar is dark, so the frame matches the app.
+- Window defaults to 1180x800 and centres itself on the current screen,
+  shrinking if the display is smaller (it used to open taller than a
+  1080p screen and clip the log).
+- The version chip, status dot and buttons all use the same rounded
+  styling as the update dialog.
 
 New in v1.9
 -----------
