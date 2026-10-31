@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.8
+﻿ElevateX Live Traffic Injector v1.9
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -48,12 +48,42 @@ Usage
 3. Enter your ElevateX username (optional - excludes YOUR flights).
 4. Press START. Aircraft appear within ~30 s.
 
-Known bugs (v1.8)
+Updates are built in. On every launch the app asks GitHub for the latest
+release; if there is a newer one a yellow "Update" button appears in the
+header. It shows the release notes, downloads the package, verifies it
+against the published SHA-256, swaps the running EXE and restarts itself.
+Click the version number next to the logo to check manually at any time.
+
+Known bugs (v1.9)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is still being tuned. The flight-path angle now uses the corrected
   speed unit (see below), which should already make it noticeably
   closer to the real attitude.
+
+New in v1.9
+-----------
+- In-app updates: the dashboard now checks GitHub for a newer release
+  (once at startup, then whenever you click the version label) and
+  offers to install it without leaving the app:
+    * a yellow "Update" pill appears in the header, showing the new
+      version number;
+    * the update dialog shows the release notes, the current and new
+      version, and the download size;
+    * the download runs in the background with a progress bar, so the
+      dashboard stays responsive;
+    * the package is verified against the SHA-256 digest published by
+      GitHub before anything is unpacked;
+    * on Windows the running EXE is renamed aside, the new one is moved
+      into place and the app restarts itself; the leftover file is
+      deleted on the next start. If anything fails, the old EXE is put
+      back and the error is shown instead of leaving a broken install;
+    * if the app is started from source (python elevatex_dashboard.py)
+      the zip is saved to Downloads and the folder is opened, so the
+      same code path can be tested without a release.
+  This release is the first one with the updater, so it is still a
+  manual download; every release after it can be installed from inside
+  the app.
 
 Fixed in v1.8
 -------------

@@ -7,11 +7,16 @@ Clean dark-themed GUI for controlling the MSFS AI traffic injector.
 import os
 import json
 import queue
+import shutil
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+import app_update
+from app_update import CURRENT_VERSION
 
 # When frozen by PyInstaller, make sure the bundled module is importable
 if getattr(sys, "frozen", False):
@@ -184,14 +189,25 @@ class Dashboard:
         self.catalog_status = "Scanning FSLTL models…"
         self._need_community_prompt = False  # set by bg scan, shown on main thread
         self._prompted_this_run = False
+        self._update_info: dict | None = None
+        self._update_win: tk.Toplevel | None = None
+        self._update_cancel = False
+        self._checking = False
         self._build_styles()
         self._build_header()
         self._build_stats()
         self._build_main()
         self._build_log()
 
+        # Folders left behind by a previous in-app update can be deleted now
+        app_update.cleanup_old()
+
         # Kick off catalog scan in background
         threading.Thread(target=self._scan_catalog, daemon=True).start()
+
+        # Check for a newer release shortly after start (no network on the UI
+        # thread, and a failure is only a log line, never a popup)
+        self.root.after(1500, self._start_update_check)
 
         # GUI refresh tick
         self._tick()
@@ -282,12 +298,24 @@ class Dashboard:
                  bg=HEADER_BG, fg=ACCENT).pack(side="left")
         tk.Label(brand, text="  LIVE TRAFFIC", font=("Segoe UI", 12),
                  bg=HEADER_BG, fg=TEXT).pack(side="left")
+        self.version_lbl = tk.Label(brand, text=f"v{CURRENT_VERSION}",
+                                    font=("Segoe UI", 8), bg=HEADER_BG,
+                                    fg=MUTED, cursor="hand2")
+        self.version_lbl.pack(side="left", padx=(10, 0))
+        self.version_lbl.bind("<Button-1>", self._manual_check)
 
         self.status_var = tk.StringVar(value="STOPPED")
         self.status_lbl = tk.Label(inner, textvariable=self.status_var,
                                    font=("Segoe UI", 10, "bold"),
                                    bg="#1e1e22", fg=RED, padx=12, pady=3)
         self.status_lbl.pack(side="right")
+
+        # Update pill — hidden until a newer release is found
+        self.update_btn = tk.Button(
+            inner, text="↑ Update", command=self._show_update_dialog,
+            bg=ACCENT, fg=ACCENT_FG, activebackground=ACCENT_HOVER,
+            activeforeground=ACCENT_FG, bd=0, relief="flat", cursor="hand2",
+            font=("Segoe UI", 9, "bold"), padx=12, pady=3)
 
     # ── stats cards ─────────────────────────────────────────────────────────
     def _build_stats(self):
@@ -760,6 +788,279 @@ class Dashboard:
             else:
                 self.tree.insert("", "end", iid=r[0], values=display,
                                  tags=tags)
+
+    # ── updates ─────────────────────────────────────────────────────────────
+    def _start_update_check(self):
+        threading.Thread(target=self._update_check_worker, daemon=True).start()
+
+    def _update_check_worker(self):
+        try:
+            info = app_update.check_latest()
+        except Exception as e:
+            self._ui(lambda: self._log(f"[Update] Check failed: {e}", "dim"))
+            return
+        if info and app_update.is_newer(info["version"], CURRENT_VERSION):
+            self._update_info = info
+            self._ui(self._on_update_found)
+        else:
+            self._ui(lambda: self._log(
+                f"[Update] Up to date (v{CURRENT_VERSION}).", "dim"))
+
+    def _on_update_found(self):
+        info = self._update_info
+        if not info:
+            return
+        self.update_btn.configure(text=f"↑ v{info['version']} available")
+        if not self.update_btn.winfo_manager():
+            self.update_btn.pack(side="right", padx=(0, 10))
+        self._log(f"[Update] v{info['version']} is available "
+                  f"(you have v{CURRENT_VERSION}).", "warn")
+
+    def _manual_check(self, _event=None):
+        """Click the version label to check again."""
+        if self._checking:
+            return
+        self._checking = True
+        self._log(f"[Update] Checking for updates (you have "
+                  f"v{CURRENT_VERSION})…", "dim")
+        threading.Thread(target=self._manual_check_worker, daemon=True).start()
+
+    def _manual_check_worker(self):
+        try:
+            info = app_update.check_latest()
+        except Exception as e:
+            def failed():
+                self._checking = False
+                self._log(f"[Update] Check failed: {e}", "warn")
+            self._ui(failed)
+            return
+
+        def done():
+            self._checking = False
+            if info and app_update.is_newer(info["version"], CURRENT_VERSION):
+                self._update_info = info
+                self._on_update_found()
+            else:
+                self._log(f"[Update] You are on the latest version "
+                          f"(v{CURRENT_VERSION}).", "dim")
+        self._ui(done)
+
+    def _ui(self, cb):
+        """Run ``cb`` on the Tk thread; ignore late callbacks after close."""
+        try:
+            self.root.after(0, cb)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _plain_notes(body: str, limit: int = 5000) -> str:
+        """Make the release markdown readable in a plain Tk text box."""
+        lines = []
+        for line in (body or "").splitlines():
+            s = line.rstrip()
+            if s.startswith("#"):
+                s = s.lstrip("#").strip()
+            s = s.replace("**", "").replace("`", "")
+            if s.startswith("> "):
+                s = "  " + s[2:]
+            if set(s) and set(s) <= set("-|: "):
+                continue
+            lines.append(s)
+        text = "\n".join(lines).strip()
+        if not text:
+            text = "No release notes were provided."
+        return text[:limit] + ("\n\n… (see the full notes on GitHub)"
+                               if len(text) > limit else "")
+
+    def _show_update_dialog(self):
+        info = self._update_info
+        if not info:
+            return
+        if self._update_win is not None and self._update_win.winfo_exists():
+            self._update_win.lift()
+            self._update_win.focus_force()
+            return
+
+        win = tk.Toplevel(self.root)
+        self._update_win = win
+        self._update_cancel = False
+        win.title(f"Update available - v{info['version']}")
+        win.configure(bg=BG)
+        win.geometry("700x600")
+        win.minsize(620, 480)
+        win.transient(self.root)
+        try:
+            win.iconphoto(False, self.root._app_icon)
+        except Exception:
+            pass
+
+        head = tk.Frame(win, bg=SURFACE)
+        head.pack(fill="x", padx=16, pady=(16, 10))
+        tk.Frame(head, bg=ACCENT, height=2).pack(fill="x", side="top")
+        tk.Label(head, text=f"v{info['version']} is ready",
+                 font=("Segoe UI", 16, "bold"), bg=SURFACE, fg=TEXT)\
+            .pack(anchor="w", padx=16, pady=(12, 0))
+        tk.Label(head, text=f"You have v{CURRENT_VERSION}  ·  {info['name']}",
+                 font=("Segoe UI", 9), bg=SURFACE, fg=MUTED)\
+            .pack(anchor="w", padx=16, pady=(2, 12))
+
+        notes_wrap = tk.Frame(win, bg=BG)
+        notes_wrap.pack(fill="both", expand=True, padx=16)
+        notes = tk.Text(notes_wrap, bg=SURFACE, fg=INFO, bd=0,
+                        highlightthickness=1, highlightbackground=BORDER,
+                        wrap="word", font=("Segoe UI", 9), padx=12, pady=10,
+                        insertbackground=TEXT, selectbackground="#2b3442")
+        vsb = ttk.Scrollbar(notes_wrap, orient="vertical",
+                            command=notes.yview)
+        notes.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        notes.pack(side="left", fill="both", expand=True)
+        notes.insert("1.0", self._plain_notes(info["body"]))
+        notes.configure(state="disabled")
+
+        foot = tk.Frame(win, bg=BG)
+        foot.pack(fill="x", padx=16, pady=(10, 16))
+
+        self.upd_status = tk.StringVar(
+            value=("Ready to download "
+                   f"({info['asset_size'] / (1024 * 1024):.1f} MB)."))
+        tk.Label(foot, textvariable=self.upd_status, font=("Segoe UI", 9),
+                 bg=BG, fg=MUTED).pack(anchor="w", pady=(0, 6))
+        self.upd_prog = ttk.Progressbar(foot, mode="determinate",
+                                        maximum=100, value=0)
+        self.upd_prog.pack(fill="x", pady=(0, 12))
+
+        btns = tk.Frame(foot, bg=BG)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Later", style="Ghost.TButton",
+                   command=self._close_update_dialog).pack(side="right")
+        ttk.Button(btns, text="Release notes", style="Ghost.TButton",
+                   command=lambda: self._open_url(info["url"]))\
+            .pack(side="right", padx=(0, 8))
+        self.btn_upd_install = ttk.Button(
+            btns, text="Download & install", style="Start.TButton",
+            command=self._install_update)
+        self.btn_upd_install.pack(side="left", ipadx=10)
+
+        tip = ("The app closes and restarts itself when the download is "
+               "verified." if app_update.is_frozen() else
+               "Running from source: the zip will be saved to Downloads.")
+        tk.Label(foot, text=tip, font=("Segoe UI", 8), bg=BG, fg=MUTED)\
+            .pack(anchor="w", pady=(8, 0))
+
+        win.protocol("WM_DELETE_WINDOW", self._close_update_dialog)
+        win.grab_set()
+
+    def _close_update_dialog(self):
+        self._update_cancel = True
+        if self._update_win is not None:
+            try:
+                self._update_win.grab_release()
+                self._update_win.destroy()
+            except Exception:
+                pass
+            self._update_win = None
+
+    def _open_url(self, url: str):
+        try:
+            import webbrowser
+            webbrowser.open(url, new=2)
+        except Exception:
+            pass
+
+    def _install_update(self):
+        info = self._update_info
+        if not info:
+            return
+        self._update_cancel = False
+        self.btn_upd_install.configure(state="disabled",
+                                       text="Downloading…")
+        threading.Thread(target=self._install_worker, args=(info,),
+                         daemon=True).start()
+
+    def _install_worker(self, info: dict):
+        tmp = tempfile.mkdtemp(prefix="elevatex_upd_")
+        try:
+            zip_path = app_update.download_update(
+                info["asset_url"], tmp,
+                expected_size=info.get("asset_size") or 0,
+                expected_sha256=info.get("asset_sha256"),
+                progress=self._update_progress,
+                cancel=lambda: self._update_cancel)
+            if self._update_cancel:
+                return
+            self._ui(lambda: self._set_update_status(
+                "Verified. Preparing the new build…"))
+
+            if not app_update.is_frozen():
+                saved = app_update.save_zip_for_manual_install(zip_path)
+                app_update.open_folder(os.path.dirname(saved))
+                self._ui(lambda: self._finish_manual(saved))
+                return
+
+            new_exe = app_update.prepare_new_exe(zip_path)
+            self._ui(lambda: self._set_update_status(
+                "Installing - the app will restart…"))
+            # Stop injecting first so the old instance releases its sim
+            # objects before the new one connects.
+            try:
+                if self.runner.running:
+                    self.runner.stop()
+                    time.sleep(0.6)
+            except Exception:
+                pass
+            app_update.install_and_restart(new_exe)
+        except app_update.UpdateError as e:
+            if str(e) == "cancelled":
+                return
+            self._ui(lambda: self._update_failed(str(e)))
+            return
+        except Exception as e:  # never let a worker kill the app silently
+            self._ui(lambda: self._update_failed(str(e)))
+            return
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        # The replacement process is starting; close this instance.
+        self._ui(self.root.destroy)
+
+        # The replacement process is starting; close this instance.
+        self._ui(self.root.destroy)
+
+    def _update_progress(self, done: int, total: int):
+        self._ui(lambda: self._render_progress(done, total))
+
+    def _render_progress(self, done: int, total: int):
+        if self._update_win is None or not self._update_win.winfo_exists():
+            return
+        mb = 1024 * 1024
+        if total > 0:
+            pct = min(100.0, done * 100.0 / total)
+            self.upd_prog.configure(mode="determinate", maximum=100,
+                                    value=pct)
+            self.upd_status.set(
+                f"Downloading… {done / mb:.1f} / {total / mb:.1f} MB "
+                f"({pct:.0f} %)")
+        else:
+            self.upd_status.set(f"Downloading… {done / mb:.1f} MB")
+
+    def _set_update_status(self, text: str):
+        if self._update_win is not None and self._update_win.winfo_exists():
+            self.upd_status.set(text)
+
+    def _finish_manual(self, saved: str):
+        if self._update_win is not None and self._update_win.winfo_exists():
+            self.upd_prog.configure(value=100)
+            self.upd_status.set(f"Saved to {saved} - extract it over the app.")
+            self.btn_upd_install.configure(state="normal", text="Close",
+                                           command=self._close_update_dialog)
+
+    def _update_failed(self, message: str):
+        if self._update_win is not None and self._update_win.winfo_exists():
+            self.upd_status.set(f"Update failed: {message}")
+            self.btn_upd_install.configure(state="normal",
+                                           text="Retry download")
+        self._log(f"[Update] {message}", "err")
 
     # ── close ───────────────────────────────────────────────────────────────
     def _on_close(self):
