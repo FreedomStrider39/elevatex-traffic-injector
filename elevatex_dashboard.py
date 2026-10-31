@@ -88,6 +88,29 @@ def _save_username(name: str) -> None:
         pass
 
 
+def _tips_seen() -> bool:
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            return bool((json.load(f) or {}).get("tips_done", False))
+    except Exception:
+        return False
+
+
+def _save_tips_seen() -> None:
+    try:
+        cfg = {}
+        try:
+            with open(_config_path(), "r", encoding="utf-8") as f:
+                cfg = json.load(f) or {}
+        except Exception:
+            pass
+        cfg["tips_done"] = True
+        with open(_config_path(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+    except Exception:
+        pass
+
+
 # ── Palette ──────────────────────────────────────────────────────────────────
 BG           = "#0B0C0E"   # window
 SURFACE      = "#121417"   # panels / cards
@@ -300,6 +323,81 @@ class SlimScrollbar(tk.Canvas):
         self._command("moveto", frac)
 
 
+class CoachTip(tk.Toplevel):
+    """One-time orange hint bubble with black text."""
+
+    def __init__(self, master, parent_bg, title, body, step, total,
+                 on_next, on_skip, last=False):
+        super().__init__(master)
+        self.overrideredirect(True)
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+        self.configure(bg=parent_bg)
+
+        canvas = tk.Canvas(self, bg=parent_bg, highlightthickness=0, bd=0)
+        canvas.pack(fill="both", expand=True)
+
+        card = tk.Frame(canvas, bg=ACCENT)
+        # Invisible spacer fixes the width so the bubble does not jump around
+        tk.Frame(card, bg=ACCENT, width=330, height=1).pack()
+        tk.Label(card, text=title, bg=ACCENT, fg="#0B0C0E",
+                 font=("Segoe UI", 10, "bold"), anchor="w", justify="left",
+                 wraplength=310).pack(fill="x", padx=16, pady=(14, 4))
+        tk.Label(card, text=body, bg=ACCENT, fg="#1A1608",
+                 font=("Segoe UI", 9), anchor="w", justify="left",
+                 wraplength=310).pack(fill="x", padx=16)
+
+        foot = tk.Frame(card, bg=ACCENT)
+        foot.pack(fill="x", padx=16, pady=(12, 12))
+        tk.Label(foot, text=f"{step} of {total}", bg=ACCENT, fg="#5A4308",
+                 font=("Segoe UI", 8, "bold")).pack(side="left")
+        PillButton(foot, text="Done" if last else "Next", command=on_next,
+                   bg="#0B0C0E", fg=ACCENT, hover="#241F14", height=28,
+                   width=64, radius=8,
+                   font=("Segoe UI", 8, "bold")).pack(side="right")
+        PillButton(foot, text="Skip", command=on_skip, bg=ACCENT, fg="#0B0C0E",
+                   hover="#E0941A", height=28, width=52, radius=8,
+                   font=("Segoe UI", 8, "bold")).pack(side="right", padx=(0, 6))
+
+        card.update_idletasks()
+        cw, ch = card.winfo_reqwidth(), card.winfo_reqheight()
+        pad = 2
+        self._tip_w, self._tip_h = cw + pad * 2, ch + pad * 2
+        canvas.configure(width=self._tip_w, height=self._tip_h)
+        canvas.create_polygon(
+            _rounded_points(0.5, 0.5, self._tip_w - 0.5, self._tip_h - 0.5, 12),
+            fill=ACCENT, outline="", tags="bg")
+        canvas.tag_lower("bg")
+        canvas.create_window(pad, pad, window=card, anchor="nw")
+        self.bind("<Escape>", lambda _e: on_skip())
+
+    def place_near(self, widget, where="right"):
+        self.update_idletasks()
+        try:
+            wx, wy = widget.winfo_rootx(), widget.winfo_rooty()
+            ww, wh = widget.winfo_width(), widget.winfo_height()
+        except Exception:
+            return
+        W, H = self._tip_w, self._tip_h
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        gap = 14
+        if where == "right":
+            x, y = wx + ww + gap, wy + wh // 2 - H // 2
+        elif where == "left":
+            x, y = wx - W - gap, wy + wh // 2 - H // 2
+        elif where == "above":
+            x, y = wx + ww // 2 - W // 2, wy - H - gap
+        elif where == "inside":
+            x, y = wx + ww - W - 26, wy + 20
+        else:  # below
+            x, y = wx + ww // 2 - W // 2, wy + wh + gap
+        x = max(8, min(x, sw - W - 8))
+        y = max(8, min(y, sh - H - 56))
+        self.geometry(f"{W}x{H}+{x}+{y}")
+
+
 class Stepper(tk.Frame):
     """Compact numeric field: −  [ 40 ]  +"""
 
@@ -433,6 +531,9 @@ class Dashboard:
         self._update_cancel = False
         self._checking = False
         self._installing = False
+        self._tip_win: CoachTip | None = None
+        self._tip_index = 0
+        self._tip_steps = []
         self._build_styles()
         self._build_header()
         self._build_stats()
@@ -447,6 +548,9 @@ class Dashboard:
         # Check for a newer release shortly after start (no network on the UI
         # thread, and a failure is only a log line, never a popup)
         self.root.after(1500, self._start_update_check)
+
+        # One-time guided tips, only on the very first launch
+        self.root.after(900, self._maybe_show_tips)
 
         # GUI refresh tick
         self._tick()
@@ -527,6 +631,12 @@ class Dashboard:
                                     padx=7, pady=2, cursor="hand2")
         self.version_lbl.pack(side="left", padx=(12, 0))
         self.version_lbl.bind("<Button-1>", self._manual_check)
+
+        self.help_btn = PillButton(brand, text="?", command=self._replay_tips,
+                                   bg=RAISED, fg=MUTED, hover="#242830",
+                                   height=22, width=24, radius=11,
+                                   font=("Segoe UI", 9, "bold"))
+        self.help_btn.pack(side="left", padx=(6, 0))
 
         # Status pill (dot + label)
         self.status_var = tk.StringVar(value="Stopped")
@@ -624,6 +734,10 @@ class Dashboard:
             tk.Label(row, text=label, font=FONT_SMALL, bg=SURFACE,
                      fg=TEXT).pack(side="left")
             Stepper(row, var, frm, to).pack(side="right")
+            if var is self.var_radius:
+                self.radius_row = row
+            else:
+                self.max_row = row
 
         tk.Label(content, text="NM · auto tracking at 30 Hz", font=FONT_TINY,
                  bg=SURFACE, fg=MUTED).pack(anchor="w", pady=(0, 2))
@@ -635,7 +749,7 @@ class Dashboard:
         tk.Label(content, text="ElevateX username", font=FONT_SMALL,
                  bg=SURFACE, fg=TEXT).pack(anchor="w", pady=(0, 6))
 
-        entry_panel = tk.Frame(content, bg=RAISED, highlightthickness=1,
+        self.entry_panel = entry_panel = tk.Frame(content, bg=RAISED, highlightthickness=1,
                                highlightbackground=BORDER,
                                highlightcolor=ACCENT)
         entry_panel.pack(fill="x")
@@ -700,7 +814,7 @@ class Dashboard:
 
         tk.Frame(tbl, bg=BORDER, height=1).pack(fill="x")
 
-        tree_wrap = tk.Frame(tbl, bg=SURFACE)
+        self.tree_wrap = tree_wrap = tk.Frame(tbl, bg=SURFACE)
         tree_wrap.pack(fill="both", expand=True, padx=6, pady=(6, 10))
 
         cols = ("callsign", "type", "airline", "dist", "alt", "gs", "model",
@@ -733,7 +847,7 @@ class Dashboard:
                                    font=FONT_SMALL, bg=SURFACE, fg=MUTED)
         self.tree_empty.place(relx=0.5, rely=0.5, anchor="center")
 
-        log_card = RoundPanel(right, height=170, pad=0)
+        self.log_card = log_card = RoundPanel(right, height=170, pad=0)
         log_card.pack(fill="x", pady=(16, 0))
         logbox = log_card.body
 
@@ -849,6 +963,8 @@ class Dashboard:
     def _on_start(self):
         if self.runner.running or self.catalog is None:
             return
+        if self._tip_win is not None:
+            self._finish_tips()  # engaging with the app dismisses the tour
         if not self.catalog.fsltl_found:
             self._log("[Error] FSLTL Traffic Base Models not found - install via the "
                       "FlyByWire Installer, or pick your Community folder with the "
@@ -1036,6 +1152,93 @@ class Dashboard:
                 self.tree.insert("", "end", iid=r[0], values=display,
                                  tags=tags)
 
+    # ── first-run tips ──────────────────────────────────────────────────────
+    def _maybe_show_tips(self):
+        if not _tips_seen():
+            self._start_tips()
+
+    def _replay_tips(self, _evt=None):
+        self._start_tips(force=True)
+
+    def _start_tips(self, force=False):
+        if not force and _tips_seen():
+            return
+        self._close_tip()
+        self._tip_steps = [
+            (self.radius_row, "Search radius",
+             "How far around your aircraft to look for live flights, in "
+             "nautical miles. 40 NM is about 74 km. Flights outside this "
+             "circle are never injected.", "right"),
+            (self.max_row, "Max aircraft",
+             "The most aircraft injected at the same time. A higher number "
+             "makes the sky busier and asks a little more of the sim; 40 is "
+             "a good starting point.", "right"),
+            (self.entry_panel, "ElevateX username",
+             "Your ElevateX name. While you are flying on the network, your "
+             "own aircraft is skipped so you never see yourself. Leave it "
+             "empty to inject every flight.", "right"),
+            (self.btn_folder, "FSLTL models",
+             "Each flight is matched to an FSLTL livery found in your "
+             "Community folder. If the line above shows 0 liveries, install "
+             "FSLTL Traffic Base or use this button to point at the folder.",
+             "right"),
+            (self.btn_start, "Start injection",
+             "Load your flight in MSFS first, then press Start. Traffic "
+             "appears within about 30 seconds and follows the real pilots.",
+             "right"),
+            (self.tree_wrap, "Live aircraft",
+             "Everything currently injected: callsign, type, airline, "
+             "distance, altitude and speed. \"Pend\" means MSFS has not "
+             "confirmed the model yet.", "inside"),
+            (self.log_card, "Activity",
+             "What the injector is doing. Errors show in red, warnings in "
+             "orange, and the update check writes its result here too.",
+             "above"),
+        ]
+        self._tip_index = 0
+        self._show_tip()
+
+    def _show_tip(self):
+        self._close_tip()
+        if self._tip_index >= len(self._tip_steps):
+            self._finish_tips()
+            return
+        widget, title, body, where = self._tip_steps[self._tip_index]
+        try:
+            if not widget.winfo_exists():
+                self._tip_index += 1
+                self._show_tip()
+                return
+        except Exception:
+            self._tip_index += 1
+            self._show_tip()
+            return
+        tip = CoachTip(self.root, SURFACE, title, body,
+                       self._tip_index + 1, len(self._tip_steps),
+                       self._next_tip, self._skip_tips,
+                       last=self._tip_index == len(self._tip_steps) - 1)
+        tip.place_near(widget, where)
+        self._tip_win = tip
+
+    def _next_tip(self):
+        self._tip_index += 1
+        self._show_tip()
+
+    def _skip_tips(self):
+        self._finish_tips()
+
+    def _finish_tips(self):
+        self._close_tip()
+        _save_tips_seen()
+
+    def _close_tip(self):
+        if self._tip_win is not None:
+            try:
+                self._tip_win.destroy()
+            except Exception:
+                pass
+            self._tip_win = None
+
     # ── updates ─────────────────────────────────────────────────────────────
     def _cleanup_leftovers(self, attempt: int = 0):
         """Delete the previous EXE after an in-app update.
@@ -1135,6 +1338,7 @@ class Dashboard:
         info = self._update_info
         if not info:
             return
+        self._close_tip()
         if self._update_win is not None and self._update_win.winfo_exists():
             self._update_win.lift()
             self._update_win.focus_force()
@@ -1347,6 +1551,7 @@ class Dashboard:
         # Abort an in-flight update first: closing the window must never let a
         # download finish in the background and swap the EXE behind the user.
         self._update_cancel = True
+        self._close_tip()
         if self.runner.running:
             self.runner.stop()
             # Give the worker a moment to clean up sim objects

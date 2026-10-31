@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.10
+﻿ElevateX Live Traffic Injector v1.11
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -54,12 +54,28 @@ header. It shows the release notes, downloads the package, verifies it
 against the published SHA-256, swaps the running EXE and restarts itself.
 Click the version number next to the logo to check manually at any time.
 
-Known bugs (v1.10)
+Known bugs (v1.11)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is still being tuned. The flight-path angle now uses the corrected
   speed unit (see below), which should already make it noticeably
   closer to the real attitude.
+
+New in v1.11
+------------
+- First-run tips: the very first time the app is opened it explains each
+  setting in small orange hint boxes with black text, pointing at the
+  control it describes.
+    * seven steps: search radius, max aircraft, ElevateX username, FSLTL
+      models, Start injection, the live aircraft table and the activity
+      log;
+    * each box has Next and Skip plus a step counter, and Escape closes
+      the tour;
+    * finishing or skipping it is remembered in config.json, so it never
+      appears again;
+    * clicking Start injection also dismisses the tour;
+    * the "?" next to the version number replays it at any time.
+- Nothing about injection changed in this release.
 
 New in v1.10
 ------------
