@@ -35,8 +35,10 @@ try:
         SIMCONNECT_EXCEPTION,
         SIMCONNECT_EVENT_FLAG,
         SIMCONNECT_GROUP_PRIORITY_HIGHEST,
+        SIMCONNECT_PERIOD,
         SIMCONNECT_RECV_ID,
         SIMCONNECT_RECV_ASSIGNED_OBJECT_ID,
+        SIMCONNECT_RECV_SIMOBJECT_DATA,
         SIMCONNECT_UNUSED,
     )
 
@@ -109,6 +111,12 @@ TRACK_INTERVAL_S = 0.033  # ~30 Hz target; smoothing is dt-based (frame-rate ind
 # turns look sluggish. PSXT/LiveTraffic smooth heading the same way.
 HDG_RATE_LIMIT_DPS = 18.0
 
+# MSFS body axes for VELOCITY BODY X/Y/Z: +X forward, +Y up, +Z right.
+# Velocity is measured from the per-tick position delta and rotated into this
+# frame. Flip to -1.0 if a sim build ever treats +Z as left (the lateral part
+# is small, but the sign must match or it doubles the sideways error).
+BODY_Z_RIGHT_SIGN = 1.0
+
 # Nearest-N selection tuning (stable, no boundary flicker).
 # Margins scale with the user's radius so a small radius stays strict
 # while the default 40 NM keeps full anti-pop protection.
@@ -127,6 +135,16 @@ ELEVATEX_FEED_URL = "https://api.elevatex.app/live/elvtx-traffic.json"
 # KJFK=4, EGLL=25, KLAX=38, EHAM=-3, KABQ=1632 - all meters).
 # MSFS works in feet, so convert on ingest.
 METERS_TO_FEET = 3.28084
+
+# `groundSpeed` is metric too: METRES PER SECOND (not knots). Verified
+# against the feed itself: sampling twice and dividing the great-circle
+# distance moved by the sample interval reproduces groundSpeed exactly,
+# in m/s, for every flight tested. Sanity: cruise median is ~240 m/s
+# (= 466 kt) and the fastest jet-stream flight ~300 m/s (= 583 kt);
+# reading those as knots would mean airliners cruising at 240 kt.
+# The old code did exactly that, so every aircraft flew at 51 % of its
+# real speed - a 150 kt take-off roll rendered as ~77 kt.
+MPS_TO_KNOTS = 1.943844
 
 
 class ElevateXFeed:
@@ -180,7 +198,7 @@ class ElevateXFeed:
                 latitude=float(pos_raw.get("latitude", 0.0)),
                 longitude=float(pos_raw.get("longitude", 0.0)),
                 altitude_ft=float(alt_raw or 0.0) * METERS_TO_FEET,
-                ground_speed_kt=float(pos_raw.get("groundSpeed", 0.0)),
+                ground_speed_kt=float(pos_raw.get("groundSpeed") or 0.0) * MPS_TO_KNOTS,
                 heading_deg=float(pos_raw.get("heading", 0.0)),
                 vertical_speed_fpm=float(pos_raw.get("verticalSpeed", 0.0)),
                 xpdr=int(pos_raw.get("xpdr", 2000)),
@@ -936,8 +954,10 @@ class _DispatchSimConnect(PySimConnect):
 
     def __init__(self, *args, **kwargs):
         self.assigned_objects: Dict[int, int] = {}  # request_id -> object_id
+        self.ground_alt: Dict[int, Tuple[float, float]] = {}  # object_id -> (ft MSL, monotonic)
         self.lock = threading.Lock()
         self.DEFINITION_POS = None  # lat/lon/alt/heading/pitch/bank (all aircraft)
+        self.DEFINITION_GROUND = None  # readable GROUND ALTITUDE (terrain under object)
         super().__init__(*args, **kwargs)
 
     def handle_exception_event(self, exc):
@@ -956,6 +976,22 @@ class _DispatchSimConnect(PySimConnect):
                     obj = cast(pData, POINTER(SIMCONNECT_RECV_ASSIGNED_OBJECT_ID)).contents
                     with self.lock:
                         self.assigned_objects[obj.dwRequestID] = obj.dwObjectID
+                elif pData.contents.dwID == SIMCONNECT_RECV_ID.SIMCONNECT_RECV_ID_SIMOBJECT_DATA:
+                    # Reply to our per-object GROUND ALTITUDE request: the
+                    # sim's own terrain/airport elevation under the aircraft.
+                    # Using this instead of the feed's airport elevation is
+                    # what keeps a taxying aircraft on the actual scenery
+                    # surface (feed elevations can differ by a couple of
+                    # metres, which showed up as a floating aircraft).
+                    obj = cast(pData, POINTER(SIMCONNECT_RECV_SIMOBJECT_DATA)).contents
+                    if int(obj.dwDefineID) == self.DEFINITION_GROUND:
+                        # dwData is a raw buffer: reinterpret the first 8 bytes
+                        # as the FLOAT64 we defined (reading dwData[0] would
+                        # give only the low 4 bytes as an integer).
+                        val = cast(obj.dwData, POINTER(c_double)).contents.value
+                        with self.lock:
+                            self.ground_alt[obj.dwObjectID] = (
+                                float(val), time.monotonic())
         except Exception:
             pass
         return super().my_dispatch_proc(pData, cbData, pContext)
@@ -970,10 +1006,11 @@ class ElevateXSimConnect:
 
         self.sm = _DispatchSimConnect(auto_connect=False)
         self.aircraft_requests = None
-        self._freeze_events = None
         self._gear_events = None
         self._light_events = None
         self._write_fails: Dict[int, int] = {}  # object_id -> consecutive failures
+        self._ground_req_fails = 0  # GROUND ALTITUDE request errors (warn once)
+        self._ground_ok_logged = False  # first successful terrain readback logged
 
     @property
     def assigned_objects(self) -> Dict[int, int]:
@@ -1047,8 +1084,79 @@ class ElevateXSimConnect:
         except Exception:
             return 0.0
 
+    def request_ground_altitude(self, object_id: int) -> None:
+        """Ask the sim for the terrain/airport elevation under an object.
+
+        MSFS knows the scenery surface at the object's position; the feed only
+        knows the airport reference elevation, which can be a couple of metres
+        off (the aircraft then taxies slightly above or below the apron). The
+        reply arrives asynchronously on the dispatch thread and lands in
+        `_DispatchSimConnect.ground_alt`.
+        """
+        try:
+            if self.sm.DEFINITION_GROUND is None:
+                def_id = self.sm.new_def_id()
+                hr = self.sm.dll.AddToDataDefinition(
+                    self.sm.hSimConnect,
+                    def_id,
+                    b"GROUND ALTITUDE",
+                    b"Feet",
+                    SIMCONNECT_DATATYPE.SIMCONNECT_DATATYPE_FLOAT64,
+                    0,
+                    SIMCONNECT_UNUSED,
+                )
+                if not self.sm.IsHR(hr, 0):
+                    return
+                self.sm.DEFINITION_GROUND = int(def_id.value)
+            req = self.sm.new_request_id()
+            hr = self.sm.dll.RequestDataOnSimObject(
+                self.sm.hSimConnect,
+                req,
+                self.sm.DEFINITION_GROUND,
+                object_id,
+                SIMCONNECT_PERIOD.SIMCONNECT_PERIOD_ONCE,
+                0,
+                0,
+                0,
+                0,
+            )
+            if not self.sm.IsHR(hr, 0):
+                self._ground_req_fails += 1
+                if self._ground_req_fails == 1:
+                    print(f"[SimConnect] GROUND ALTITUDE request failed "
+                          f"(hr=0x{hr & 0xFFFFFFFF:08X}); using feed elevation.")
+        except Exception:
+            pass
+
+    def ground_altitude(self, object_id: int, max_age: float = 8.0) -> Optional[float]:
+        """Last reported sim ground elevation (ft MSL) under `object_id`."""
+        with self.sm.lock:
+            rec = self.sm.ground_alt.get(object_id)
+        if not rec:
+            return None
+        val, t = rec
+        if time.monotonic() - t > max_age:
+            return None
+        if not (-1500.0 <= val <= 30000.0):
+            return None
+        if not self._ground_ok_logged:
+            self._ground_ok_logged = True
+            print(f"[SimConnect] Sim terrain elevation readback active "
+                  f"({val:.0f} ft MSL) - ground aircraft will sit on the scenery.")
+        return val
+
     def spawn_airborne_aircraft(self, title: str, tail: str, lat: float, lon: float, alt_ft: float, heading: float, speed_kt: float, on_ground: bool = False) -> int:
-        """Spawn AI simulated object (no AI pilot) at a real-world position."""
+        """Spawn an injected AI object at a real-world position.
+
+        The object is ALWAYS created with OnGround = 0 and Airspeed = 0,
+        even when the flight is on a runway/gate. That is what JoinFS does,
+        and it matters: an AICreateNonATCAircraft spawned with OnGround = 1
+        enters MSFS's AI ground state, which clamps PLANE ALTITUDE and leaves
+        the aircraft glued to the ground (the nose rotates, but it never
+        climbs). The ground look is preserved by the altitude we write (the
+        caller snaps it to the field elevation), and the velocity write in
+        update_position() carries the aircraft through the take-off.
+        """
         req_id = self.sm.new_request_id().value
 
         init_pos = SIMCONNECT_DATA_INITPOSITION()
@@ -1058,8 +1166,8 @@ class ElevateXSimConnect:
         init_pos.Heading = heading
         init_pos.Pitch = 0.0
         init_pos.Bank = 0.0
-        init_pos.OnGround = 1 if on_ground else 0
-        init_pos.Airspeed = int(max(speed_kt, 0))
+        init_pos.OnGround = 0   # never start in the sim's ground-locked state
+        init_pos.Airspeed = 0   # we drive motion ourselves via position+velocity
 
         hr = self.sm.dll.AICreateNonATCAircraft(
             self.sm.hSimConnect,
@@ -1084,48 +1192,6 @@ class ElevateXSimConnect:
         self._check(hr, f"AICreateParkedATCAircraft('{title}' @ {airport_icao})")
         return req_id
 
-    def _get_freeze_events(self, freeze_altitude: bool = True):
-        """Map the FREEZE events once and cache their client event IDs.
-
-        We freeze POSITION (lat/lon) and ALTITUDE so the sim's own physics/AI
-        never fights our writes -- this is what stops aircraft sinking,
-        bouncing and jittering.
-
-        ATTITUDE is deliberately NOT frozen. In MSFS, FREEZE_ATTITUDE_SET also
-        blocks PLANE PITCH/BANK writes, which flattened the nose. We instead
-        write pitch/bank every frame, which overrides any attitude drift.
-        """
-        if self._freeze_events is None:
-            self._freeze_events = {}
-        key = bool(freeze_altitude)
-        if key not in self._freeze_events:
-            names = [b"FREEZE_LATITUDE_LONGITUDE_SET", b"FREEZE_ALTITUDE_SET"]
-            self._freeze_events[key] = [self.sm.map_to_sim_event(n) for n in names]
-        return self._freeze_events[key]
-
-    def freeze_object(self, object_id: int, freeze_altitude: bool = True) -> bool:
-        """Freeze an AI object's lat/lon + altitude so MSFS stops moving it.
-
-        Pairs with coordinate writes (PLANE LATITUDE etc). Attitude is left
-        free so our pitch/bank writes stick (see _get_freeze_events).
-        """
-        ok = True
-        for ev in self._get_freeze_events(freeze_altitude):
-            if ev is None:
-                ok = False
-                continue
-            hr = self.sm.dll.TransmitClientEvent(
-                self.sm.hSimConnect,
-                object_id,
-                ev.value,
-                1,  # SET = 1 (freeze ON)
-                SIMCONNECT_GROUP_PRIORITY_HIGHEST.value,
-                SIMCONNECT_EVENT_FLAG.SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY.value,
-            )
-            if not self.sm.IsHR(hr, 0):
-                ok = False
-        return ok
-
     def _get_gear_events(self):
         """Map the gear-up / gear-down events once and cache their IDs."""
         if self._gear_events is None:
@@ -1138,7 +1204,7 @@ class ElevateXSimConnect:
     def set_gear(self, object_id: int, down: bool) -> bool:
         """Raise/lower an AI object's landing gear.
 
-        A frozen/teleported AI object never runs the sim's own gear logic, so
+        A teleported/injected AI object never runs the sim's own gear logic, so
         its gear would stay wherever it spawned. We command it explicitly via
         the GEAR_DOWN / GEAR_UP events addressed to the object.
         """
@@ -1158,7 +1224,7 @@ class ElevateXSimConnect:
     def _get_light_events(self):
         """Map the light state events once and cache their IDs.
 
-        A frozen AI object never runs the model's own light logic, so its
+        A teleported/injected AI object never runs the model's own light logic, so its
         nav/beacon/strobe/taxi/landing lights stay dark. We command the light
         STATES ourselves (matching what JoinFS/vPilot do): the *_SET events
         take 1=on / 0=off. Logo and wing lights are left as the model had them.
@@ -1196,21 +1262,27 @@ class ElevateXSimConnect:
                 accepted[name] = on
         return accepted
 
-    def update_position(self, object_id: int, lat: float, lon: float, alt_ft: float, heading: float, speed_kt: float, on_ground: bool = False, pitch_deg: float = 0.0, bank_deg: float = 0.0):
-        """Update position/heading/attitude of an active ElevateX aircraft.
+    def update_position(self, object_id: int, lat: float, lon: float, alt_ft: float, heading: float, speed_kt: float, on_ground: bool = False, pitch_deg: float = 0.0, bank_deg: float = 0.0, vs_fpm: float = 0.0, vel_mps: Optional[Tuple[float, float, float]] = None):
+        """Update position/heading/attitude/velocity of an active aircraft.
 
         Uses continuous coordinate writes (PLANE LATITUDE / LONGITUDE /
         ALTITUDE / HEADING / PITCH / BANK) rather than "Initial Position",
         which reloads scenery and resets flight dynamics.
 
-        We write the SAME six fields for every aircraft (ground and airborne).
-        Because freeze_object() freezes lat/lon + altitude, the sim can no
-        longer fight these writes (no sinking/bouncing/jitter), and because
-        attitude is not frozen the pitch/bank actually stick -- giving a
-        realistic nose-up on climbs and bank on turns (vPilot/xPilot style).
-        On-ground aircraft are passed an altitude snapped to field elevation.
+        We deliberately do NOT freeze the object any more (JoinFS/PSXT don't
+        either). FREEZE_ALTITUDE_SET makes MSFS hold PLANE ALTITUDE at the
+        value it had when the freeze was sent, so a ground aircraft that was
+        frozen on spawn can rotate but never climb. Instead of freezing, we
+        write the position every tick and also push VELOCITY BODY (m/s), so
+        the sim's own integration carries the aircraft up and renders a
+        continuous motion between our 30 Hz polls -- this is exactly how
+        JoinFS keeps its traffic smooth (it steers with velocity and only
+        snaps position when the sim drifts, with a special 0.2 m altitude
+        tolerance on the ground because MSFS otherwise glues AI to the
+        ground).
         """
         heading_rad = math.radians(heading % 360.0)
+        pitch_rad = math.radians(pitch_deg)
 
         if self.sm.DEFINITION_POS is None:
             self.sm.DEFINITION_POS = self.sm.new_def_id()
@@ -1221,6 +1293,9 @@ class ElevateXSimConnect:
                 (b"PLANE HEADING DEGREES TRUE", b"Radians"),
                 (b"PLANE PITCH DEGREES", b"Radians"),
                 (b"PLANE BANK DEGREES", b"Radians"),
+                (b"VELOCITY BODY X", b"Meters per second"),
+                (b"VELOCITY BODY Y", b"Meters per second"),
+                (b"VELOCITY BODY Z", b"Meters per second"),
             ]:
                 self.sm.dll.AddToDataDefinition(
                     self.sm.hSimConnect,
@@ -1231,14 +1306,43 @@ class ElevateXSimConnect:
                     0,
                     SIMCONNECT_UNUSED,
                 )
-            print(f"[SimConnect] Position/attitude definition ready "
-                  f"(id={self.sm.DEFINITION_POS.value}, 6 fields).")
+            print(f"[SimConnect] Position/attitude/velocity definition ready "
+                  f"(id={self.sm.DEFINITION_POS.value}, 9 fields).")
         def_id = self.sm.DEFINITION_POS.value
-        data = (c_double * 6)(
+
+        # Velocity in body axes (X forward, Y up, Z right), the same kind of
+        # write JoinFS uses. MSFS integrates this velocity for the model
+        # between our writes, which is what makes the motion smooth instead
+        # of a 30 Hz teleport. Crucially it also gives the sim an upward
+        # component at rotation, so MSFS releases the "glued to the ground"
+        # AI state instead of pinning the aircraft to the runway while the
+        # nose pitches up.
+        #
+        # `vel_mps` is the velocity the CALLER measured from the position
+        # delta it is about to write (see the tracking loop). That matters:
+        # the sim integrates this vector between our 30 Hz writes, so if it
+        # disagrees with the path we actually draw, the aircraft overshoots
+        # between writes and is pulled back on the next one -- the visible
+        # back-and-forth "stutter". Using the real delta makes the sim's
+        # motion between writes land exactly on the next written position.
+        # The fallback below (nominal speed along the heading) is only used
+        # for the first write after a spawn, when no delta exists yet.
+        if vel_mps is not None:
+            vel_x, vel_y, vel_z = vel_mps
+        else:
+            gs_mps = max(speed_kt, 0.0) * 0.514444      # kt -> m/s
+            up_mps = vs_fpm * 0.00508                   # fpm -> m/s
+            cos_p, sin_p = math.cos(pitch_rad), math.sin(pitch_rad)
+            vel_x = gs_mps * cos_p + up_mps * sin_p     # forward
+            vel_y = -gs_mps * sin_p + up_mps * cos_p    # up
+            vel_z = 0.0                                 # no sideslip
+
+        data = (c_double * 9)(
             lat, lon, alt_ft, heading_rad,
             # MSFS convention: +PITCH = nose DOWN, +BANK = LEFT wing down.
             # Our values are natural (+pitch up, +bank right) -> negate.
-            -math.radians(pitch_deg), -math.radians(bank_deg),
+            -pitch_rad, -math.radians(bank_deg),
+            vel_x, vel_y, vel_z,
         )
 
         hr = self.sm.dll.SetDataOnSimObject(
@@ -1266,6 +1370,8 @@ class ElevateXSimConnect:
         req_id = self.sm.new_request_id().value
         hr = self.sm.dll.AIRemoveObject(self.sm.hSimConnect, object_id, req_id)
         self._check(hr, f"AIRemoveObject({object_id})")
+        with self.sm.lock:
+            self.sm.ground_alt.pop(object_id, None)
 
 
 # ==============================================================================
@@ -1284,7 +1390,6 @@ class ActiveInjectedAircraft:
     last_lon: float
     last_alt: float
     spawn_time: float
-    frozen: bool = False
     smooth_alt: Optional[float] = None  # low-pass filtered altitude for jitter-free motion
     smooth_lat: Optional[float] = None  # smoothed lat/lon/heading (kills feed-sample jumps)
     smooth_lon: Optional[float] = None
@@ -1296,8 +1401,13 @@ class ActiveInjectedAircraft:
     gear_down: Optional[bool] = None  # last commanded gear state (None = not yet sent)
     lights: Dict[str, bool] = dataclasses.field(default_factory=dict)  # last accepted light states
     last_tick: float = 0.0  # monotonic time of last position write
+    last_write_t: float = 0.0  # monotonic time of the last accepted position write
+    ground_req_t: float = 0.0  # monotonic time of last GROUND ALTITUDE request
     logged: bool = False  # first-write coordinates logged once (render diagnosis)
     att: Optional[object] = None  # AttitudeModel: pitch/bank + rotation, flare, derotation
+    dbg_t: float = 0.0  # throttled altitude diagnostics
+    dbg_flare: bool = False
+    dbg_landed: bool = False
 
 
 class LiveTrafficInjector:
@@ -1736,6 +1846,13 @@ class LiveTrafficInjector:
                 pose = flight.track.step(now)
                 if pose is None:
                     continue
+                # A moving flight needs two samples before its real feed
+                # cadence (and therefore its playback delay) is known. If we
+                # spawn it on the first sample it appears at the live position
+                # and is then yanked backwards when the playhead is anchored.
+                # Parked/slow traffic is stationary, so it can appear at once.
+                if not flight.track.ready and pose.gs >= 50.0:
+                    continue
                 lat, lon, alt_ft = pose.lat, pose.lon, pose.alt
                 heading, gs_kt = pose.hdg, pose.gs
                 on_ground = is_on_ground(pose, flight.origin_elev_ft,
@@ -1840,10 +1957,41 @@ class LiveTrafficInjector:
             dt = now - active.last_tick if active.last_tick else TRACK_INTERVAL_S
             if active.att is None:
                 active.att = AttitudeModel()
+            # Ground reference: ask the sim for the terrain/airport elevation
+            # under the object as soon as we are low enough to care, and use it
+            # for BOTH the attitude/flare surface and the final altitude blend.
+            # The feed's airport elevation comes from a different source than
+            # the sim scenery and can be a couple of metres off; aiming the
+            # flare at the feed value made an otherwise perfect arrival touch
+            # down/roll out slightly above the apron. The reply is
+            # asynchronous, so until it arrives (or if the sim refuses) we keep
+            # using the feed elevation. Refresh every 2 s while low.
+            feed_ref = ground_ref(pose, flight.origin_elev_ft, flight.dest_elev_ft)
+            pose_agl = None if feed_ref is None else pose.alt - feed_ref
+            elevs_ref = [e for e in (flight.origin_elev_ft, flight.dest_elev_ft)
+                         if e > -100.0]
+            ground_sim = None
+            # Ask for the sim terrain whenever we are low OR slow: a taxiing
+            # aircraft is identified by its speed, not by the feed's altitude,
+            # which can be a long way off if the other pilot's altimeter/QNH
+            # is bad. Without this, a bad altitude read meant no terrain
+            # reference was fetched and the aircraft fell back to the feed's
+            # airport elevation -- the "sometimes floats while taxiing" case.
+            if pose_agl is None or pose_agl < 800.0 or gs_kt < 60.0:
+                if now - active.ground_req_t > 2.0:
+                    active.ground_req_t = now
+                    self.sim.request_ground_altitude(active.object_id)
+                ground_sim = self.sim.ground_altitude(active.object_id)
+            # Sanity: GROUND ALTITUDE must be near one of the two airports the
+            # flight is associated with, otherwise it is a stale/garbage reply
+            # (e.g. the sea under a just-despawned object).
+            if ground_sim is not None and elevs_ref:
+                nearest = min(elevs_ref, key=lambda e: abs(e - ground_sim))
+                if abs(ground_sim - nearest) > 100.0:
+                    ground_sim = None
+            elev_ref = ground_sim if ground_sim is not None else feed_ref
             pitch_deg, bank_deg, alt_model = active.att.update(
-                pose,
-                ground_ref(pose, flight.origin_elev_ft, flight.dest_elev_ft),
-                dt)
+                pose, elev_ref, dt)
 
             # Rendered altitude is always the AttitudeModel output: it is
             # continuous through rotation, flare and derotation. Near the
@@ -1853,8 +2001,7 @@ class LiveTrafficInjector:
             # on-ground flag tripped, which produced a visible single-frame
             # drop on touchdown (the landing "step").
             agl = agl_ft(pose, flight.origin_elev_ft, flight.dest_elev_ft)
-            elevs = [e for e in (flight.origin_elev_ft, flight.dest_elev_ft)
-                     if e > -100.0]
+            elevs = elevs_ref
             # Determine on-ground ROBUSTLY. The feed altitude is noisy by
             # tens of feet, so a plain "agl < X" test flips from frame to
             # frame: that made the altitude blend oscillate (jitter on the
@@ -1867,14 +2014,47 @@ class LiveTrafficInjector:
             #                        a speed at which a climb is possible. The
             #                        150 ft margin sits above the feed's
             #                        altitude noise so a rolling aircraft cannot
-            #                        trip it.
+            #                        trip it -- and the aircraft must be
+            #                        ACCELERATING: a roll-out is fast too, and
+            #                        a single noisy altitude sample on the
+            #                        roll-out used to be read as a lift-off,
+            #                        which lifted the aircraft off the runway
+            #                        and made it float while taxiing.
+            accelerating_ahead = (pose.next_gs is None
+                                  or pose.next_gs >= pose.gs + 5.0)
             climbing_ahead = (pose.next_alt is not None
                               and pose.next_alt - pose.alt > 150.0
-                              and gs_kt > 80.0)
-            if (is_on_ground(pose, flight.origin_elev_ft, flight.dest_elev_ft)
+                              and gs_kt > 80.0
+                              and accelerating_ahead)
+            # A clearly-airborne height above the field is a stable cue on its
+            # own (the feed altitude noise is only tens of feet). Without it a
+            # take-off whose NEXT sample is less than 150 ft higher never
+            # clears the latch: the aircraft would rotate, but the altitude
+            # blend would keep pinning it to the field elevation. It must not
+            # apply to a taxi/roll-out (GS below take-off speed, decelerating).
+            clearly_airborne = (agl is not None and agl > 200.0
+                                and gs_kt > 80.0
+                                and (pose.next_gs is None
+                                     or pose.next_gs >= pose.gs - 5.0))
+            # Roll-out cue: low, fast, NOT accelerating and NOT flaring means
+            # the wheels are down. This is the safety net for the intermittent
+            # float: the feed altitude can spike for a single sample during a
+            # roll-out, the latch-clearing cues above are now conservative, and
+            # without this the aircraft would be handed back to the feed
+            # altitude and hover a few metres above the surface for a second
+            # or two before settling. The `not flare` guard keeps it out of
+            # the landing flare (which starts much higher) and the
+            # `not accelerating` guard keeps it out of the take-off roll.
+            low_rollout = (agl is not None and 0.0 <= agl < 20.0
+                           and gs_kt > 50.0
+                           and not active.att.flare
+                           and not accelerating_ahead)
+            if (low_rollout
+                    or is_on_ground(pose, flight.origin_elev_ft,
+                                    flight.dest_elev_ft)
                     or active.att.landed):
                 on_ground = True
-            elif active.att.flare or climbing_ahead:
+            elif active.att.flare or climbing_ahead or clearly_airborne:
                 on_ground = False
             else:
                 # Neither a confident ground nor air cue: HOLD the previous
@@ -1883,8 +2063,9 @@ class LiveTrafficInjector:
                 # noisy agl/vs sample flip us frame to frame.
                 on_ground = active.on_ground_latch
             active.on_ground_latch = on_ground
-            field = (min(elevs, key=lambda e: abs(e - alt_model))
-                     if elevs else None)
+            field = (ground_sim if ground_sim is not None else
+                     (min(elevs, key=lambda e: abs(e - alt_model))
+                      if elevs else None))
             if field is not None:
                 wants = 1.0 if on_ground else 0.0
                 tau = 0.5 if wants > active.ground_lock else 1.0
@@ -1894,7 +2075,36 @@ class LiveTrafficInjector:
             else:
                 alt_ft = alt_model
 
-            # Landing gear: a frozen/teleported AI object never runs the sim's
+            # --- Temporary altitude diagnostics (remove once fixed) --------
+            _fl = bool(active.att.flare)
+            _ld = bool(active.att.landed)
+            _agl = "None" if agl is None else f"{agl:.0f}"
+            if _fl and not active.dbg_flare:
+                print(f"[Alt] {active.callsign} FLARE START ref={active.att.ref:.0f} "
+                      f"hf={active.att.hf:.1f} pose={pose.alt:.0f} agl={_agl} "
+                      f"gs={gs_kt:.0f} vs={pose.vs:.0f}")
+            if _ld and not active.dbg_landed:
+                print(f"[Alt] {active.callsign} TOUCHDOWN ref={active.att.ref:.0f} "
+                      f"off={active.att.off:.1f} pose={pose.alt:.0f} field="
+                      f"{'None' if field is None else f'{field:.0f}'}")
+            if active.dbg_flare and not _fl and not _ld:
+                print(f"[Alt] {active.callsign} FLARE ABORT h={active.att.h:.1f} "
+                      f"ga_t={active.att.ga_t:.2f} pose={pose.alt:.0f} agl={_agl}")
+            if active.dbg_landed and not _ld:
+                print(f"[Alt] {active.callsign} LANDED CLEAR pose={pose.alt:.0f} agl={_agl}")
+            active.dbg_flare, active.dbg_landed = _fl, _ld
+            if (now - active.dbg_t) >= 2.0 and agl is not None and (agl < 3000.0 or on_ground):
+                active.dbg_t = now
+                print(f"[Alt] {active.callsign} pose={pose.alt:.0f} model={alt_model:.0f} "
+                      f"field={'None' if field is None else f'{field:.0f}'} out={alt_ft:.0f} "
+                      f"gsim={'None' if ground_sim is None else f'{ground_sim:.0f}'} "
+                      f"agl={agl:.0f} gs={gs_kt:.0f} gnd={int(on_ground)} fl={int(_fl)} "
+                      f"ld={int(_ld)} gl={active.ground_lock:.2f} "
+                      f"alt_s={active.att.alt_s:.0f} h={active.att.h:.1f} "
+                      f"off={active.att.off:.1f} orig={flight.origin_elev_ft:.0f} "
+                      f"dest={flight.dest_elev_ft:.0f}")
+
+            # Landing gear: an injected/teleported AI object never runs the sim's
             # own gear logic, so we command it explicitly. Down on the ground
             # and on approach, up in the climb and cruise, with hysteresis so
             # it cannot flap. Retries until the sim accepts the event.
@@ -1911,7 +2121,7 @@ class LiveTrafficInjector:
                 if self.sim.set_gear(active.object_id, want_gear):
                     active.gear_down = want_gear
 
-            # Lights: a frozen AI object never runs the model's own light
+            # Lights: an injected AI object never runs the model's own light
             # logic, so it flies dark. Command the standard light states
             # ourselves (as JoinFS/vPilot do), driven by the same phase cues
             # as the gear: nav + beacon always (aircraft is live), strobes on
@@ -1932,14 +2142,12 @@ class LiveTrafficInjector:
                 accepted = self.sim.set_lights(active.object_id, changes)
                 active.lights.update(accepted)
 
-            # Freeze the object once so the AI brain/physics stops fighting our
-            # writes. Coordinate writes only (PLANE LATITUDE etc), never Initial
-            # Position. We freeze lat/lon AND altitude for every aircraft (ground
-            # and air) so it can't sink, bounce or jitter; attitude is left free
-            # so our pitch/bank writes stick.
-            if not active.frozen:
-                active.frozen = self.sim.freeze_object(active.object_id)
-
+            # Freeze events are intentionally NOT used. FREEZE_ALTITUDE_SET
+            # makes MSFS hold PLANE ALTITUDE at its current value, which pins
+            # a ground-spawned aircraft to the runway forever (it can rotate
+            # but never climb). JoinFS/PSXT do not freeze either: they write
+            # position + velocity continuously and let the sim integrate the
+            # motion between updates. update_position() now does the same.
             # --- No position smoothing: the pose is already smooth (it
             # moves along the curve, never jumps). Only attitude keeps
             # a gentle exponential ease so banks/pitches fade in.
@@ -1971,6 +2179,46 @@ class LiveTrafficInjector:
                                      + max(-lim, min(lim, step))) % 360.0
             heading = active.smooth_hdg
 
+            # Velocity to write = the velocity of the position we are about
+            # to write, measured from the previous written pose. The sim
+            # integrates the body velocity between our 30 Hz writes; if that
+            # vector does not match the path we draw, the aircraft overshoots
+            # between writes and is pulled back on the next one -- the
+            # "stutter"/sideways shimmer visible on every aircraft. Using the
+            # real delta makes the sim's own integration land exactly on the
+            # next written position. It also keeps the vertical component in
+            # step with the altitude we actually render (which is the shaped
+            # AttitudeModel output, not the raw feed altitude), removing the
+            # vertical bob as well.
+            vel_mps = None
+            dt_w = now - active.last_write_t if active.last_write_t else 0.0
+            if 0.004 < dt_w < 0.5 and active.last_lat:
+                coslat = max(math.cos(math.radians(lat)), 0.01)
+                v_n = (lat - active.last_lat) * 111320.0 / dt_w
+                v_e = (lon - active.last_lon) * 111320.0 * coslat / dt_w
+                v_u = (alt_ft - active.last_alt) * 0.3048 / dt_w
+                if on_ground:
+                    # Wheels down: never hand the sim a vertical velocity.
+                    # A small altitude-blend step would otherwise be integrated
+                    # between our writes and read as the model hopping or
+                    # briefly floating; the position write alone moves it in
+                    # the vertical while it is on the surface.
+                    v_u = 0.0
+                h_rad = math.radians(heading % 360.0)
+                p_rad = math.radians(active.smooth_pitch or 0.0)
+                fwd = v_n * math.cos(h_rad) + v_e * math.sin(h_rad)
+                right = -v_n * math.sin(h_rad) + v_e * math.cos(h_rad)
+                vx = fwd * math.cos(p_rad) + v_u * math.sin(p_rad)
+                vy = -fwd * math.sin(p_rad) + v_u * math.cos(p_rad)
+                vz = right * BODY_Z_RIGHT_SIGN
+                # A teleport / re-spawn / huge correction must not be handed
+                # to the sim as a velocity (it would fling the model). Only
+                # use the measured delta when it is physically plausible; the
+                # nominal velocity fallback covers the rest.
+                if (math.hypot(vx, vz) <= max(gs_kt * 0.514444 * 3.0, 140.0)
+                        and abs(vy) <= 40.0):
+                    vel_mps = (vx, vy, vz)
+
             # Send position update
             try:
                 if not active.logged:
@@ -1982,10 +2230,12 @@ class LiveTrafficInjector:
                 self.sim.update_position(active.object_id, lat, lon, alt_ft,
                                          heading, gs_kt, on_ground,
                                          active.smooth_pitch or 0.0,
-                                         active.smooth_bank or 0.0)
+                                         active.smooth_bank or 0.0,
+                                         pose.vs, vel_mps)
                 active.last_lat = lat
                 active.last_lon = lon
                 active.last_alt = alt_ft
+                active.last_write_t = now
             except Exception as e:
                 pass
 

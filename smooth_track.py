@@ -4,12 +4,17 @@ smooth_track.py - delayed, interpolated playback of sparse position samples.
 
 Why: dead-reckoning forward from the last sample means every new sample is a
 *correction* (a visible leap). Instead we render a fixed time in the PAST
-(about one feed interval + a small margin), so the playhead is always between
+(about one real feed gap + a small margin), so the playhead is always between
 two samples we already have and just moves along a curve between them.
-Nothing ever needs correcting, so nothing leaps.
+
+The feed is sparse (measured: 55 % of updates arrive within 20 s, but a
+quarter of flights only update every ~90 s), so each Track learns its own
+cadence and sizes its delay accordingly. A moving aircraft is not spawned
+until its second sample, i.e. until that delay is known -- otherwise it would
+pop in at the live position and be yanked backwards.
 
 Per flight:
-    track = Track(expected_interval=12.0)          # your poll interval
+    track = Track(expected_interval=30.0)         # typical gap; real gap learned
     track.push(Sample(t=created_at, lat=.., lon=.., alt=.., hdg=.., gs=.., vs=..),
                arrival=time.monotonic())           # whenever a NEW sample comes in
     ...every tick:
@@ -83,6 +88,54 @@ def _project(s: Sample, dt: float) -> Pose:
         lon=_norm_lon(s.lon + d_nm * math.sin(h) / (60.0 * cos0)),
         alt=s.alt + max(-2500.0, min(2500.0, s.vs * dt / 60.0)),
         hdg=s.hdg % 360.0, gs=s.gs, vs=s.vs, hdg_rate=0.0,
+    )
+
+
+def _extrapolate(s1: Sample, s0: Optional[Sample], dt: float) -> Pose:
+    """Predict a pose `dt` seconds past the newest sample (starved playhead).
+
+    JoinFS extrapolates position with velocity *and* acceleration
+    (Sim.Pos.Extrapolate) and caps it at 2 s.  Our feed can go missing for a
+    whole minute or more, so a 2 s cap is not enough -- but projecting with a
+    frozen heading is wrong too: a 3 deg/s turn for 60 s misses the real track
+    by kilometres, and the correction that follows is exactly the sideways
+    slide that makes our traffic look less smooth than JoinFS.
+
+    So reuse the turn / speed trend of the last known segment, fading it out
+    (tau 15 s) and clamping it: the aircraft continues the turn it was in for
+    a few seconds, then settles onto the new heading instead of circling
+    forever.  Altitude keeps the last vertical speed, as before.
+    """
+    dt = max(0.0, dt)
+    if s0 is None or dt <= 0.0:
+        return _project(s1, dt)
+
+    seg = max(s1.t - s0.t, 0.05)
+    # Trend of the last known segment, clamped to plausible flight dynamics
+    # (a noisy feed sample must not invent a 30 deg/s turn or a 20 kt/s accel).
+    hdg_rate = max(-5.0, min(5.0, _wrap180(s1.hdg - s0.hdg) / seg))
+    gs_rate = max(-3.0, min(3.0, (s1.gs - s0.gs) / seg))
+
+    tau = 15.0
+    decay = 1.0 - math.exp(-dt / tau)
+    dh = max(-60.0, min(60.0, hdg_rate * tau * decay))
+    dgs = max(-40.0, min(40.0, gs_rate * tau * decay))
+
+    h = math.radians(s1.hdg + dh * 0.5)          # heading halfway through
+    gs_mid = max(0.0, s1.gs + dgs * 0.5)
+    dist_nm = gs_mid * dt / 3600.0
+    cos0 = max(math.cos(math.radians(s1.lat)), 0.01)
+    return Pose(
+        lat=s1.lat + dist_nm * math.cos(h) / 60.0,
+        lon=_norm_lon(s1.lon + dist_nm * math.sin(h) / (60.0 * cos0)),
+        alt=s1.alt + max(-2500.0, min(2500.0, s1.vs * dt / 60.0)),
+        hdg=(s1.hdg + dh) % 360.0,
+        gs=max(0.0, s1.gs + dgs),
+        vs=s1.vs,
+        hdg_rate=hdg_rate * math.exp(-dt / tau),  # roll out of the turn
+        next_alt=None,
+        next_gs=None,
+        prev_gs=s1.gs,
     )
 
 
@@ -226,7 +279,9 @@ class Track:
 
         self.q: Deque[Sample] = deque()
         self.cands: Deque[float] = deque(maxlen=8)   # feed_time - local_time per arrival
+        self.gaps: Deque[float] = deque(maxlen=4)    # recent real sample gaps (s)
         self.interval: Optional[float] = None
+        self.primed = False                          # playhead anchored to a real gap?
         self.off: Optional[float] = None             # playhead = now + off
         self.last_now: Optional[float] = None
         self.out: Optional[Pose] = None
@@ -254,10 +309,21 @@ class Track:
                     self.extrap = False
                     self.interval = None
                     self.cands.clear()
+                    self.gaps.clear()
                     self.off = None
+                    self.primed = False
                 else:
-                    g = min(max(gap, 0.5), 60.0)
-                    self.interval = g if self.interval is None else 0.7 * self.interval + 0.3 * g
+                    # Learn this flight's own cadence. The feed publishes in
+                    # ~30 s batches and a given flight may only update every
+                    # 60-120 s. Use the LARGEST recent gap, not an average:
+                    # the delay has to cover the next gap too, and averaging
+                    # (or clamping low) is what used to push the playhead off
+                    # the end of the known samples, forcing a dead-reckon and
+                    # then a visible correction. Slow flights pay for this
+                    # with a little more delay; fast flights are unchanged.
+                    g = min(max(gap, 0.5), 120.0)
+                    self.gaps.append(g)
+                    self.interval = min(max(self.gaps), 90.0)
             self.q.append(s)
             while len(self.q) > self.max_samples:
                 self.q.popleft()
@@ -266,6 +332,16 @@ class Track:
                 self.out = _pose_of(s)
 
     # ---- output ------------------------------------------------------------
+    @property
+    def ready(self) -> bool:
+        """True once the real feed cadence is known (two samples).
+
+        The injector waits for this before spawning a MOVING aircraft, so it
+        appears at the delayed positions it will actually fly from instead of
+        popping in at the live sample and being yanked backwards.
+        """
+        return len(self.q) >= 2
+
     def _delay(self) -> float:
         return (self.interval if self.interval is not None else self.expected_interval) + self.margin
 
@@ -277,10 +353,31 @@ class Track:
             dt = 0.0 if self.last_now is None else min(max(now - self.last_now, 0.0), 1.0)
             self.last_now = now
 
-            # Playhead offset: follow the best (lowest-latency) arrival, but slew
-            # slowly (<=5%) so a latency change never shows up as a speed jump.
-            target = max(self.cands) - self._delay()
-            if self.off is None:
+            # Playhead offset: play about one real gap behind the newest
+            # sample. Use the NEWEST arrival (not the minimum age of the last
+            # eight): the delay has to cover a full gap, and following a
+            # fresher old arrival silently shortened it until the playhead
+            # ran off the end of the known samples.
+            target = self.cands[-1] - self._delay()
+            if not self.primed:
+                # Anchor the playhead exactly once we know this flight's real
+                # cadence (two samples). Doing this at the first sample (delay
+                # guessed from the 12 s poll interval) left it stuck ~15 s
+                # behind for the whole flight: every 30-120 s gap then forced
+                # a dead-reckon and a correction. Re-anchoring before spawn is
+                # invisible; afterwards the 5 %/s slew below handles drift.
+                if len(q) >= 2:
+                    self.off = target
+                    self.primed = True
+                    # Before this point the pose was only a placeholder (the
+                    # injector withholds a moving aircraft until ready), so
+                    # drop any correction instead of sliding the aircraft back
+                    # onto the real track for the next two minutes.
+                    self.corr = (0.0, 0.0, 0.0)
+                    self.extrap = False
+                elif self.off is None:
+                    self.off = target
+            elif self.off is None:
                 self.off = target
             else:
                 lim = 0.05 * dt
@@ -293,14 +390,20 @@ class Track:
             if len(q) == 1:
                 dtp = max(-60.0, min(P - q[0].t, self.max_hold_s))
                 raw = _pose_of(q[0]) if q[0].gs < GROUND_HOLD_KT else _project(q[0], dtp)
-                extrap_now = P > q[0].t
+                # A single sample is not a "starved track": do not arm the
+                # rejoin correction from it (that offset used to survive into
+                # the first real segment and drift the aircraft sideways).
+                extrap_now = False
             elif P >= q[-1].t:                       # starved: run on from newest sample
                 if q[-1].gs < GROUND_HOLD_KT:
                     # Ground/taxi with no fresh data: hold the last known spot
                     # rather than dead-reckon off the taxiway (PSXT does this).
                     raw = _pose_of(q[-1])
                 else:
-                    raw = _project(q[-1], min(P - q[-1].t, self.max_hold_s))
+                    # Continue the last known turn/speed trend instead of a
+                    # frozen-heading straight line (see _extrapolate).
+                    raw = _extrapolate(q[-1], q[-2] if len(q) > 1 else None,
+                                       min(P - q[-1].t, self.max_hold_s))
                 extrap_now = True
             elif P <= q[0].t:                        # startup: just before first sample
                 raw = _project(q[0], max(P - q[0].t, -60.0))
@@ -311,14 +414,39 @@ class Track:
                 raw = _interp(a, b, (P - a.t) / seg, seg, self.elevs)
                 extrap_now = False
 
-            # Leaving a starved/extrapolated stretch: absorb the mismatch and fade it out.
+            # Leaving a starved/extrapolated stretch: absorb the mismatch and
+            # fade it out. The fade is speed-capped (JoinFS does the same thing
+            # by adding the delta to velocity, and snaps only past 50 m): a
+            # large post-starvation error must not turn into a sideways slide
+            # at hundreds of m/s. If the prediction was 1 km out, the aircraft
+            # drifts back onto the real track over ~a minute instead of
+            # swerving across the sky in 4 seconds.
             if self.extrap and not extrap_now and self.out is not None:
                 self.corr = (self.out.lat - raw.lat,
                              _wrap180(self.out.lon - raw.lon),
                              self.out.alt - raw.alt)
             self.extrap = extrap_now
-            k = math.exp(-dt / 4.0)
-            self.corr = (self.corr[0] * k, self.corr[1] * k, self.corr[2] * k)
+            dt_c = max(dt, 1e-3)
+            retain = math.exp(-dt_c / 4.0)
+            # Amount of the remaining offset to remove this tick (the offset
+            # itself stays in self.corr and is added back below, so the first
+            # frame after a starve renders exactly where the aircraft already
+            # was -- no jump -- and only the capped step moves it).
+            step_lat = self.corr[0] * (1.0 - retain)
+            step_lon = self.corr[1] * (1.0 - retain)
+            step_alt = self.corr[2] * (1.0 - retain)
+            cos0 = max(math.cos(math.radians(raw.lat)), 0.01)
+            err_m = math.hypot(step_lat * 111320.0,
+                               step_lon * 111320.0 * cos0)
+            if err_m > CORR_MAX_MPS * dt_c:
+                s = (CORR_MAX_MPS * dt_c) / max(err_m, 1e-9)
+                step_lat *= s
+                step_lon *= s
+            if abs(step_alt) > CORR_MAX_FPS * dt_c:
+                step_alt = math.copysign(CORR_MAX_FPS * dt_c, step_alt)
+            self.corr = (_wrap180(self.corr[0] - step_lat),
+                         _wrap180(self.corr[1] - step_lon),
+                         self.corr[2] - step_alt)
             raw.lat += self.corr[0]
             raw.lon = _norm_lon(raw.lon + self.corr[1])
             raw.alt += self.corr[2]
@@ -328,6 +456,8 @@ class Track:
 
 # ---- attitude / vertical profile ---------------------------------------------
 GROUND_HOLD_KT = 60.0        # below this speed a gap means "hold position", not dead-reckon
+CORR_MAX_MPS = 15.0          # max horizontal speed used to rejoin the real track (m/s)
+CORR_MAX_FPS = 2.5           # max vertical speed used to rejoin the real altitude (ft/s)
 GROUND_AGL_FT = 40.0         # below this (gs >= 50) the aircraft is on the runway
 ROTATE_GS_KT = 110.0         # earliest speed at which the nose may rotate
 ROTATE_PITCH_DEG = 11.0      # pitch reached on the runway before lift-off
@@ -531,9 +661,14 @@ class AttitudeModel:
             alt_out = pose.alt + self.off
 
         # Clear the landed flag only on a genuine climb-away (touch-and-go),
-        # never on a noisy sink-rate reading.
-        if self.landed and (pose.alt > self.ref + 150.0
-                            or (agl is not None and agl > 150.0)):
+        # never on a noisy sample: the height test uses the lightly smoothed
+        # altitude and the aircraft has to be ACCELERATING away. A single high
+        # GPS altitude reading during the roll-out used to clear this flag,
+        # hand the altitude back to the feed and lift the aircraft off the
+        # taxiway for a few seconds (the intermittent "floating while taxiing").
+        accel = (pose.next_gs is not None and pose.next_gs - pose.gs >= 8.0)
+        high = self.alt_s is not None and self.alt_s - self.ref > 150.0
+        if self.landed and high and accel:
             self.landed = False                                   # touch-and-go
 
         # ---- pitch target -----------------------------------------------
