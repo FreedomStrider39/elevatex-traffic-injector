@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.11
+﻿ElevateX Live Traffic Injector v1.12
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -39,6 +39,9 @@ Requirements
 - Microsoft Flight Simulator 2024
 - FSLTL Traffic Base installed in your Community folder
   (https://github.com/FSLTL/fsltl-traffic-base)
+  ONLY the models are needed. Do NOT run the FSLTL Traffic Injector at the
+  same time - this app replaces it, and running both injects every flight
+  twice and makes them fight over SimConnect.
 - Python 3.12 + SimConnect package, OR just run the EXE (no Python needed)
 
 Usage
@@ -54,12 +57,22 @@ header. It shows the release notes, downloads the package, verifies it
 against the published SHA-256, swaps the running EXE and restarts itself.
 Click the version number next to the logo to check manually at any time.
 
-Known bugs (v1.11)
+Known bugs (v1.12)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is still being tuned. The flight-path angle now uses the corrected
   speed unit (see below), which should already make it noticeably
   closer to the real attitude.
+
+New in v1.12
+------------
+- Clearer FSLTL requirement: only the FSLTL MODELS (Traffic Base) are
+  needed. The FSLTL Traffic Injector must NOT be running - this app
+  replaces it, and two injectors fight over the same traffic.
+    * the first-run tip now says this explicitly;
+    * the app checks for the FSLTL injector process at startup and when
+      you press Start, and warns in the activity log if it is running;
+    * the README and website requirements say the same.
 
 New in v1.11
 ------------

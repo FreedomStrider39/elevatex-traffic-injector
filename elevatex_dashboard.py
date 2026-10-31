@@ -111,6 +111,53 @@ def _save_tips_seen() -> None:
         pass
 
 
+def _fsltl_injector_running() -> bool:
+    """True if FSLTL's own traffic injector is running (Windows only).
+
+    We need the FSLTL *models* only. FSLTL's injector must stay closed: it
+    injects the same traffic through SimConnect and the two fight over it.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_void_p),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # SNAPPROCESS
+        if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+            return False
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while ok:
+                name = entry.szExeFile.lower()
+                if "fsltl" in name and "inject" in name:
+                    return True
+                ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(ctypes.c_void_p(snapshot))
+    except Exception:
+        pass
+    return False
+
+
 # ── Palette ──────────────────────────────────────────────────────────────────
 BG           = "#0B0C0E"   # window
 SURFACE      = "#121417"   # panels / cards
@@ -552,6 +599,9 @@ class Dashboard:
         # One-time guided tips, only on the very first launch
         self.root.after(900, self._maybe_show_tips)
 
+        # FSLTL's own injector must not run alongside this app
+        self.root.after(2200, self._check_fsltl_injector)
+
         # GUI refresh tick
         self._tick()
 
@@ -965,6 +1015,7 @@ class Dashboard:
             return
         if self._tip_win is not None:
             self._finish_tips()  # engaging with the app dismisses the tour
+        self._check_fsltl_injector()
         if not self.catalog.fsltl_found:
             self._log("[Error] FSLTL Traffic Base Models not found - install via the "
                       "FlyByWire Installer, or pick your Community folder with the "
@@ -1153,6 +1204,18 @@ class Dashboard:
                                  tags=tags)
 
     # ── first-run tips ──────────────────────────────────────────────────────
+    def _check_fsltl_injector(self) -> bool:
+        try:
+            if _fsltl_injector_running():
+                self._log("[Warning] FSLTL Traffic Injector is running. Close "
+                          "it before injecting - you only need the FSLTL "
+                          "models (Traffic Base), not FSLTL's own injector.",
+                          "warn")
+                return True
+        except Exception:
+            pass
+        return False
+
     def _maybe_show_tips(self):
         if not _tips_seen():
             self._start_tips()
@@ -1178,9 +1241,10 @@ class Dashboard:
              "own aircraft is skipped so you never see yourself. Leave it "
              "empty to inject every flight.", "right"),
             (self.btn_folder, "FSLTL models",
-             "Each flight is matched to an FSLTL livery found in your "
-             "Community folder. If the line above shows 0 liveries, install "
-             "FSLTL Traffic Base or use this button to point at the folder.",
+             "Install FSLTL Traffic Base in your Community folder. You do NOT "
+             "need FSLTL's own injector - keep it closed while this app runs, "
+             "or both will inject the same flights. If this shows 0 liveries, "
+             "install the models or pick the folder with this button.",
              "right"),
             (self.btn_start, "Start injection",
              "Load your flight in MSFS first, then press Start. Traffic "
