@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.12
+﻿ElevateX Live Traffic Injector v1.13
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -57,12 +57,41 @@ header. It shows the release notes, downloads the package, verifies it
 against the published SHA-256, swaps the running EXE and restarts itself.
 Click the version number next to the logo to check manually at any time.
 
-Known bugs (v1.12)
+Known bugs (v1.13)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is still being tuned. The flight-path angle now uses the corrected
   speed unit (see below), which should already make it noticeably
   closer to the real attitude.
+
+New in v1.13
+------------
+- Smoother take-offs and landings. A frame-by-frame analyser was added to
+  the offline replay and it found four real discontinuities; all four are
+  fixed, with before -> after numbers from that replay.
+    * Spawning on a runway no longer sinks onto it. A ground spawn now
+      starts already pinned to the field instead of using the noisy feed
+      altitude for one frame and then dropping onto the surface
+      (up to ~80 ft/s for half a second -> 0).
+    * Lift-off no longer pops. The hand-over from "pinned to the runway"
+      to the feed altitude is rate-limited and slower, so the climb starts
+      smoothly (vertical kick 37.8 -> 9 ft/s).
+    * The landing flare is no longer yanked down by a single noisy altitude
+      sample. The floor is eased and rate-limited, and after 8 s it fades
+      out so a persistent altimeter/QNH bias can never hold the aircraft
+      above the runway. Short-final roughness 0.031 -> 0.005 and the worst
+      touchdown kink 13.5 -> 5.9 ft/s; flare-to-touchdown stays 2.6-5.5 s
+      across 18 replay runs, with no aborts or repeated ground toggles.
+    * Rolling away from a standstill no longer lurches: each segment now
+      starts at the speed the previous segment actually ended at, so the
+      rendered speed is continuous (6.1 -> 0.17 kt/frame).
+- Tips point at the exact control with a drawn arrow: the settings arrows
+  line up with their row, the table tip points up at its header, and the
+  Activity tip points down at the log bar. Bubbles are placed before they
+  are shown, so they never flash at the wrong position.
+- The Activity log is now a collapsible panel. It starts closed and shows
+  the latest line as a preview, colour-coded like the log itself; click the
+  title or the chevron to expand it. The state is remembered in config.json.
 
 New in v1.12
 ------------

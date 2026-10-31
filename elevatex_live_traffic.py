@@ -1893,6 +1893,11 @@ class LiveTrafficInjector:
                     smooth_hdg=heading,
                     smooth_alt=alt_ft,
                     last_tick=now,
+                    # A ground aircraft is already pinned to the field at spawn;
+                    # start the blend engaged so the first tick does not write
+                    # the raw (noisy) feed altitude and then visibly sink onto
+                    # the runway over the next half second.
+                    ground_lock=1.0 if on_ground else 0.0,
                 )
             except Exception as e:
                 print(f"[Spawn] Skipping {flight.callsign}: {e}",
@@ -2068,10 +2073,19 @@ class LiveTrafficInjector:
                       if elevs else None))
             if field is not None:
                 wants = 1.0 if on_ground else 0.0
-                tau = 0.5 if wants > active.ground_lock else 1.0
+                tau = 0.5 if wants > active.ground_lock else 1.4
                 active.ground_lock += ((wants - active.ground_lock)
                                        * _smooth_factor(dt, tau))
                 alt_ft = alt_model + (field - alt_model) * active.ground_lock
+                if 0.0 < active.ground_lock < 1.0 and active.last_alt:
+                    # Ease the hand-over between "pinned to the field" and the
+                    # feed altitude. Right at lift-off the blend releases while
+                    # the feed altitude can be 30+ ft above the runway, which
+                    # used to move the aircraft ~35 ft/s for a frame or two --
+                    # a visible pop. Cap that transition at 15 ft/s.
+                    max_step = 9.0 * dt
+                    alt_ft = active.last_alt + max(
+                        -max_step, min(max_step, alt_ft - active.last_alt))
             else:
                 alt_ft = alt_model
 

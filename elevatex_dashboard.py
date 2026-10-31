@@ -88,6 +88,29 @@ def _save_username(name: str) -> None:
         pass
 
 
+def _config_get(key, default=None):
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            return (json.load(f) or {}).get(key, default)
+    except Exception:
+        return default
+
+
+def _config_set(key, value) -> None:
+    try:
+        cfg = {}
+        try:
+            with open(_config_path(), "r", encoding="utf-8") as f:
+                cfg = json.load(f) or {}
+        except Exception:
+            pass
+        cfg[key] = value
+        with open(_config_path(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+    except Exception:
+        pass
+
+
 def _tips_seen() -> bool:
     try:
         with open(_config_path(), "r", encoding="utf-8") as f:
@@ -371,10 +394,12 @@ class SlimScrollbar(tk.Canvas):
 
 
 class CoachTip(tk.Toplevel):
-    """One-time orange hint bubble with black text."""
+    """Orange hint bubble with black text and a pointer to its control."""
+
+    ARROW = 11
 
     def __init__(self, master, parent_bg, title, body, step, total,
-                 on_next, on_skip, last=False):
+                 on_next, on_skip, last=False, arrow="left"):
         super().__init__(master)
         self.overrideredirect(True)
         try:
@@ -382,9 +407,12 @@ class CoachTip(tk.Toplevel):
         except Exception:
             pass
         self.configure(bg=parent_bg)
+        self._arrow = arrow
+        self._arrow_pos = None
 
         canvas = tk.Canvas(self, bg=parent_bg, highlightthickness=0, bd=0)
         canvas.pack(fill="both", expand=True)
+        self._canvas = canvas
 
         card = tk.Frame(canvas, bg=ACCENT)
         # Invisible spacer fixes the width so the bubble does not jump around
@@ -411,38 +439,186 @@ class CoachTip(tk.Toplevel):
         card.update_idletasks()
         cw, ch = card.winfo_reqwidth(), card.winfo_reqheight()
         pad = 2
-        self._tip_w, self._tip_h = cw + pad * 2, ch + pad * 2
-        canvas.configure(width=self._tip_w, height=self._tip_h)
-        canvas.create_polygon(
-            _rounded_points(0.5, 0.5, self._tip_w - 0.5, self._tip_h - 0.5, 12),
-            fill=ACCENT, outline="", tags="bg")
-        canvas.tag_lower("bg")
-        canvas.create_window(pad, pad, window=card, anchor="nw")
+        self._pad = pad
+        self._card_w, self._card_h = cw, ch
+        aw = self.ARROW if arrow in ("left", "right") else 0
+        ah = self.ARROW if arrow in ("up", "down") else 0
+        W, H = cw + pad * 2 + aw, ch + pad * 2 + ah
+        cx = pad + (aw if arrow == "left" else 0)
+        cy = pad + (ah if arrow == "up" else 0)
+        self._card_box = (cx, cy, cx + cw, cy + ch)
+        self._tip_w, self._tip_h = W, H
+        canvas.configure(width=W, height=H)
+        self._draw_arrow()
+        self._card_item = canvas.create_window(cx, cy, window=card,
+                                               anchor="nw")
         self.bind("<Escape>", lambda _e: on_skip())
+        self.withdraw()  # shown only once it has been placed
 
-    def place_near(self, widget, where="right"):
+    def _layout(self, arrow):
+        """Resize the window so there is room for the arrow on that side."""
+        self._arrow = arrow
+        pad = self._pad
+        aw = self.ARROW if arrow in ("left", "right") else 0
+        ah = self.ARROW if arrow in ("up", "down") else 0
+        W = self._card_w + pad * 2 + aw
+        H = self._card_h + pad * 2 + ah
+        cx = pad + (aw if arrow == "left" else 0)
+        cy = pad + (ah if arrow == "up" else 0)
+        self._card_box = (cx, cy, cx + self._card_w, cy + self._card_h)
+        self._tip_w, self._tip_h = W, H
+        self._canvas.configure(width=W, height=H)
+        try:
+            self._canvas.coords(self._card_item, cx, cy)
+        except Exception:
+            pass
+        self._arrow_pos = None
+
+    def _draw_arrow(self):
+        x0, y0, x1, y1 = self._card_box
+        c = self._canvas
+        c.delete("tipbg")
+        c.create_polygon(
+            _rounded_points(x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5, 12),
+            fill=ACCENT, outline="", tags="tipbg")
+        if self._arrow in ("left", "right", "up", "down"):
+            if self._arrow_pos is None:
+                p = (y0 + y1) / 2 if self._arrow in ("left", "right") \
+                    else (x0 + x1) / 2
+            else:
+                p = self._arrow_pos
+            a = self.ARROW
+            if self._arrow == "left":
+                pts = (x0, p - 8, x0, p + 8, x0 - a, p)
+            elif self._arrow == "right":
+                pts = (x1, p - 8, x1, p + 8, x1 + a, p)
+            elif self._arrow == "up":
+                pts = (p - 8, y0, p + 8, y0, p, y0 - a)
+            else:
+                pts = (p - 8, y1, p + 8, y1, p, y1 + a)
+            c.create_polygon(pts, fill=ACCENT, outline="", tags="tipbg")
+        c.tag_lower("tipbg")
+
+    def place_near(self, widget, where="right", anchor=None):
         self.update_idletasks()
         try:
             wx, wy = widget.winfo_rootx(), widget.winfo_rooty()
             ww, wh = widget.winfo_width(), widget.winfo_height()
+            aw = anchor or widget
+            ax, ay = aw.winfo_rootx(), aw.winfo_rooty()
+            aww, ahh = aw.winfo_width(), aw.winfo_height()
         except Exception:
             return
+
+        if where == "right":
+            arrow = "left"
+        elif where == "left":
+            arrow = "right"
+        elif where == "above":
+            arrow = "down"
+        elif where == "inside":
+            arrow = "none"
+        else:  # below
+            arrow = "up"
+        self._layout(arrow)
+
         W, H = self._tip_w, self._tip_h
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        gap = 14
+        gap = 12
+
         if where == "right":
-            x, y = wx + ww + gap, wy + wh // 2 - H // 2
+            x = ax + aww + gap - 2
+            y = wy + wh // 2 - H // 2
         elif where == "left":
-            x, y = wx - W - gap, wy + wh // 2 - H // 2
+            x = ax - W - gap + 2
+            y = wy + wh // 2 - H // 2
         elif where == "above":
-            x, y = wx + ww // 2 - W // 2, wy - H - gap
+            x = wx + ww // 2 - W // 2
+            y = ay - H - gap + 2
         elif where == "inside":
-            x, y = wx + ww - W - 26, wy + 20
+            x = ax + aww - W - 26
+            y = ay + 20
         else:  # below
-            x, y = wx + ww // 2 - W // 2, wy + wh + gap
+            x = wx + ww // 2 - W // 2
+            y = ay + ahh + gap - 2
+
         x = max(8, min(x, sw - W - 8))
         y = max(8, min(y, sh - H - 56))
         self.geometry(f"{W}x{H}+{x}+{y}")
+
+        # Point the arrow at the exact centre of the control, even after the
+        # box was nudged to stay on screen.
+        try:
+            if self._arrow in ("left", "right"):
+                self._arrow_pos = self._clamp_arrow(wy + wh / 2 - y, "v")
+            elif self._arrow in ("up", "down"):
+                self._arrow_pos = self._clamp_arrow(wx + ww / 2 - x, "h")
+            self._draw_arrow()
+        except Exception:
+            pass
+        try:
+            self.deiconify()
+            self.lift()
+        except Exception:
+            pass
+
+    def _clamp_arrow(self, pos, axis):
+        x0, y0, x1, y1 = self._card_box
+        if axis == "v":
+            return max(y0 + 14, min(y1 - 14, pos))
+        return max(x0 + 14, min(x1 - 14, pos))
+
+
+class ChevronButton(tk.Canvas):
+    """Small round button with a drawn chevron (crisper than a glyph)."""
+
+    def __init__(self, master, command, *, size=24, direction="down",
+                 bg=RAISED, fg=MUTED, hover="#242830"):
+        super().__init__(master, width=size, height=size,
+                         bg=master.cget("bg"), highlightthickness=0, bd=0,
+                         cursor="hand2")
+        self._command = command
+        self._dir = direction
+        self._size = size
+        self._bg, self._fg = bg, fg
+        self._hover_bg = hover
+        self._hovering = False
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", lambda _e: self._command())
+
+    def set_direction(self, direction):
+        self._dir = direction
+        self._draw()
+
+    def _on_enter(self, _e=None):
+        self._hovering = True
+        self._draw()
+
+    def _on_leave(self, _e=None):
+        self._hovering = False
+        self._draw()
+
+    def _draw(self):
+        s = self._size
+        self.delete("all")
+        fill = self._hover_bg if self._hovering else self._bg
+        self.create_polygon(
+            _rounded_points(0.5, 0.5, s - 0.5, s - 0.5, s / 2 - 1),
+            fill=fill, outline="")
+        cx = cy = s / 2
+        d = 4
+        if self._dir == "down":
+            pts = (cx - d, cy - d / 2, cx, cy + d / 2, cx + d, cy - d / 2)
+        elif self._dir == "up":
+            pts = (cx - d, cy + d / 2, cx, cy - d / 2, cx + d, cy + d / 2)
+        elif self._dir == "left":
+            pts = (cx + d / 2, cy - d, cx - d / 2, cy, cx + d / 2, cy + d)
+        else:
+            pts = (cx - d / 2, cy - d, cx + d / 2, cy, cx - d / 2, cy + d)
+        self.create_line(*pts, fill=self._fg, width=2,
+                         capstyle="round", joinstyle="round")
 
 
 class Stepper(tk.Frame):
@@ -739,7 +915,7 @@ class Dashboard:
         main.pack(fill="both", expand=True, padx=22, pady=(16, 18))
 
         # ── left: control sidebar ──
-        left = RoundPanel(main, width=300, pad=18)
+        self.side_panel = left = RoundPanel(main, width=300, pad=18)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         side = left.body
@@ -854,7 +1030,7 @@ class Dashboard:
         table_card.pack(fill="both", expand=True)
         tbl = table_card.body
 
-        thead = tk.Frame(tbl, bg=SURFACE)
+        self.table_head = thead = tk.Frame(tbl, bg=SURFACE)
         thead.pack(fill="x", padx=18, pady=(13, 9))
         tk.Label(thead, text="Live aircraft", font=("Segoe UI", 11, "bold"),
                  bg=SURFACE, fg=TEXT).pack(side="left")
@@ -897,19 +1073,35 @@ class Dashboard:
                                    font=FONT_SMALL, bg=SURFACE, fg=MUTED)
         self.tree_empty.place(relx=0.5, rely=0.5, anchor="center")
 
-        self.log_card = log_card = RoundPanel(right, height=170, pad=0)
+        self.log_card = log_card = RoundPanel(right, height=54, pad=0)
         log_card.pack(fill="x", pady=(16, 0))
         logbox = log_card.body
 
         loghead = tk.Frame(logbox, bg=SURFACE)
-        loghead.pack(fill="x", padx=18, pady=(12, 8))
-        tk.Label(loghead, text="Activity", font=("Segoe UI", 11, "bold"),
-                 bg=SURFACE, fg=TEXT).pack(side="left")
-        PillButton(loghead, text="Clear", command=self._clear_log, bg=RAISED,
-                   fg=MUTED, hover="#242830", height=24, width=64, radius=7,
-                   font=FONT_TINY).pack(side="right")
+        loghead.pack(fill="x", padx=18, pady=(10, 10))
+        self.log_title = tk.Label(loghead, text="Activity",
+                                  font=("Segoe UI", 11, "bold"),
+                                  bg=SURFACE, fg=TEXT, cursor="hand2")
+        self.log_title.pack(side="left")
+        self.log_title.bind("<Button-1>", lambda _e: self._toggle_log())
 
-        self.log_text = tk.Text(logbox, height=5, bg=SURFACE, fg=INFO,
+        self.log_chevron = ChevronButton(loghead, self._toggle_log,
+                                         size=24, direction="right")
+        self.log_chevron.pack(side="right")
+
+        self.btn_clear_log = PillButton(loghead, text="Clear",
+                                        command=self._clear_log, bg=RAISED,
+                                        fg=MUTED, hover="#242830", height=22,
+                                        width=58, radius=7, font=FONT_TINY)
+
+        self.log_preview = tk.StringVar(value="No activity yet")
+        self.log_preview_lbl = tk.Label(loghead,
+                                        textvariable=self.log_preview,
+                                        font=FONT_SMALL, bg=SURFACE, fg=MUTED,
+                                        anchor="w")
+
+        self.log_body = tk.Frame(logbox, bg=SURFACE)
+        self.log_text = tk.Text(self.log_body, height=5, bg=SURFACE, fg=INFO,
                                 font=FONT_MONO, insertbackground=TEXT,
                                 selectbackground=ACCENT,
                                 selectforeground=ACCENT_FG, relief="flat",
@@ -923,12 +1115,46 @@ class Dashboard:
         self.log_text.tag_configure("warn", foreground=ACCENT)
         self.log_text.tag_configure("dim", foreground=MUTED)
 
+        # Activity starts collapsed to keep the table big; the last line is
+        # always shown as a preview, and the state is remembered.
+        self._log_open = bool(_config_get("log_open", False))
+        self._apply_log_state()
+
+
+    def _toggle_log(self):
+        self._log_open = not self._log_open
+        self._apply_log_state()
+        _config_set("log_open", self._log_open)
+
+    def _apply_log_state(self):
+        open_ = bool(self._log_open)
+        try:
+            self.log_card.configure(height=196 if open_ else 54)
+        except Exception:
+            pass
+        if open_:
+            self.log_body.pack(fill="both", expand=True)
+            self.log_preview_lbl.pack_forget()
+            self.btn_clear_log.pack(side="right", padx=(0, 8))
+            self.log_chevron.set_direction("down")
+            try:
+                self.log_text.see("end")
+            except Exception:
+                pass
+        else:
+            self.log_body.pack_forget()
+            self.log_preview_lbl.pack(side="left", padx=(12, 0))
+            self.btn_clear_log.pack_forget()
+            self.log_chevron.set_direction("right")
+
 
     def _clear_log(self):
         try:
             self.log_text.configure(state="normal")
             self.log_text.delete("1.0", "end")
             self.log_text.configure(state="disabled")
+            self.log_preview.set("No activity yet")
+            self.log_preview_lbl.configure(fg=MUTED)
         except Exception:
             pass
 
@@ -1058,6 +1284,13 @@ class Dashboard:
         self.log_text.insert("end", f"[{ts}] {msg}\n", tag)
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        try:
+            preview = msg if len(msg) <= 88 else msg[:87] + "…"
+            self.log_preview.set(preview)
+            self.log_preview_lbl.configure(
+                fg={"err": RED, "warn": ACCENT, "ok": GREEN}.get(tag, MUTED))
+        except Exception:
+            pass
 
     # ── periodic GUI refresh ────────────────────────────────────────────────
     def _tick(self):
@@ -1231,29 +1464,29 @@ class Dashboard:
             (self.radius_row, "Search radius",
              "How far around your aircraft to look for live flights, in "
              "nautical miles. 40 NM is about 74 km. Flights outside this "
-             "circle are never injected.", "right"),
+             "circle are never injected.", "right", self.side_panel),
             (self.max_row, "Max aircraft",
              "The most aircraft injected at the same time. A higher number "
              "makes the sky busier and asks a little more of the sim; 40 is "
-             "a good starting point.", "right"),
+             "a good starting point.", "right", self.side_panel),
             (self.entry_panel, "ElevateX username",
              "Your ElevateX name. While you are flying on the network, your "
              "own aircraft is skipped so you never see yourself. Leave it "
-             "empty to inject every flight.", "right"),
+             "empty to inject every flight.", "right", self.side_panel),
             (self.btn_folder, "FSLTL models",
              "Install FSLTL Traffic Base in your Community folder. You do NOT "
              "need FSLTL's own injector - keep it closed while this app runs, "
              "or both will inject the same flights. If this shows 0 liveries, "
              "install the models or pick the folder with this button.",
-             "right"),
+             "right", self.side_panel),
             (self.btn_start, "Start injection",
              "Load your flight in MSFS first, then press Start. Traffic "
              "appears within about 30 seconds and follows the real pilots.",
-             "right"),
-            (self.tree_wrap, "Live aircraft",
+             "right", self.side_panel),
+            (self.table_head, "Live aircraft",
              "Everything currently injected: callsign, type, airline, "
              "distance, altitude and speed. \"Pend\" means MSFS has not "
-             "confirmed the model yet.", "inside"),
+             "confirmed the model yet.", "below"),
             (self.log_card, "Activity",
              "What the injector is doing. Errors show in red, warnings in "
              "orange, and the update check writes its result here too.",
@@ -1267,7 +1500,9 @@ class Dashboard:
         if self._tip_index >= len(self._tip_steps):
             self._finish_tips()
             return
-        widget, title, body, where = self._tip_steps[self._tip_index]
+        step = self._tip_steps[self._tip_index]
+        widget, title, body, where = step[:4]
+        anchor = step[4] if len(step) > 4 else None
         try:
             if not widget.winfo_exists():
                 self._tip_index += 1
@@ -1281,7 +1516,7 @@ class Dashboard:
                        self._tip_index + 1, len(self._tip_steps),
                        self._next_tip, self._skip_tips,
                        last=self._tip_index == len(self._tip_steps) - 1)
-        tip.place_near(widget, where)
+        tip.place_near(widget, where, anchor)
         self._tip_win = tip
 
     def _next_tip(self):

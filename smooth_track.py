@@ -235,10 +235,18 @@ def _interp(a: Sample, b: Sample, u: float, seg: float, elevs=()) -> Pose:
         su10 = u * u * u - 2 * u * u + u               # cubic-basis, zero slope at 0/1
         su01 = -2 * u * u * u + 3 * u * u              # zero->one ease
         su11 = u * u * u - u * u                       # slope at 1
-        d0 = min(max(a.gs / 3600.0 / avg, 0.0), 3.0)   # start speed / avg
+        # Start from the speed the PREVIOUS segment actually left this sample
+        # at (v_play), not the reported one. When the chord is too short for
+        # the reported speeds (an aircraft pulling away from a standstill, or
+        # braking hard) the monotone clamp cannot reach them, and using the
+        # reported value would make the rendered speed jump at the boundary.
+        v0 = a.v_play if a.v_play >= 0.0 else a.gs
+        d0 = min(max(v0 / 3600.0 / avg, 0.0), 3.0)     # start speed / avg
         d1 = min(max(b.gs / 3600.0 / avg, 0.0), 3.0)   # end speed / avg
         w = su10 * d0 + su01 + su11 * d1
         w = min(max(w, 0.0), 1.0)
+        # Speed we actually leave b at; the next segment uses it as its start.
+        b.v_play = max(0.0, d1 * avg * 3600.0)
     w2 = w * w
     w3 = w2 * w
     h10 = w3 - 2 * w2 + w
@@ -536,6 +544,9 @@ class AttitudeModel:
         self.was_high = 0.0       # highest AGL seen -- a take-off roll never got high
         self.cool = 0.0           # s; blocks re-arming the flare right after it ends
         self.alt_s = None         # lightly smoothed feed altitude (bounds the flare)
+        self.cap_s = None         # eased flare floor (never yanked by a noisy sample)
+        self.flare_t = 0.0        # time spent in the current flare (s)
+        self.alt_out_s = None     # lightly smoothed rendered altitude (airborne only)
 
     def update(self, pose: Pose, elev_ft: Optional[float], dt: float):
         """-> (pitch_deg, bank_deg, alt_ft)"""
@@ -563,7 +574,7 @@ class AttitudeModel:
         if self.alt_s is None:
             self.alt_s = pose.alt
         else:
-            self.alt_s += (pose.alt - self.alt_s) * (1.0 - math.exp(-dt / 0.5))
+            self.alt_s += (pose.alt - self.alt_s) * (1.0 - math.exp(-dt / 0.8))
 
         fresh = False
         # ---- landing flare: trigger -------------------------------------
@@ -615,18 +626,38 @@ class AttitudeModel:
                 self.ref = ref
                 self.shape_alt = True
                 self.flare = True
+                self.cap_s = None
+                self.flare_t = 0.0
                 fresh = True
 
         # ---- landing flare: run -----------------------------------------
         if self.flare:
+            self.flare_t += dt
             if not fresh:
                 self.h = (self.h + self.hb) * math.exp(-dt / self.tau) - self.hb
-            # Never hover ABOVE the real aircraft: clamp the shaped height to
-            # the (smoothed) height the feed actually shows, +2 ft of slack.
-            # Without this the exponential's slow tail floated the flare down
-            # the runway and touched down only after vacating.
+            # Never hover ABOVE the real aircraft: ease the shaped height onto
+            # the (smoothed) height the feed actually shows instead of snapping
+            # to it. The old hard clamp dropped several feet in a single frame
+            # whenever a noisy altitude sample dipped, which showed up as a
+            # visible vertical jerk right before touchdown. The floor is itself
+            # eased (cap_s) and the approach to it is rate-limited, so the
+            # descent stays continuous.
             if self.alt_s is not None:
-                self.h = min(self.h, max(self.alt_s - self.ref, 0.0) + 2.0)
+                floor = max(self.alt_s - self.ref, 0.0) + 0.5
+                # A persistent altitude bias (bad altimeter/QNH) must not hold
+                # the aircraft above the runway forever: after ~8 s of flare,
+                # fade the floor out so it always touches down on the surface.
+                if self.flare_t > 8.0:
+                    floor *= math.exp(-(self.flare_t - 8.0) / 2.0)
+                if self.cap_s is None:
+                    self.cap_s = max(floor, self.h)
+                else:
+                    self.cap_s += ((floor - self.cap_s)
+                                   * (1.0 - math.exp(-dt / 0.4)))
+                if self.h > self.cap_s:
+                    step = (self.cap_s - self.h) * (1.0 - math.exp(-dt / 0.5))
+                    step = max(step, -12.0 * dt)      # <= ~12 ft/s downward
+                    self.h += step
             # Go-around: only when the aircraft has genuinely climbed away for
             # a sustained time. A single noisy feed sample (the derived
             # sink-rate is worthless near the ground) must NOT abort the flare
@@ -647,7 +678,7 @@ class AttitudeModel:
                     self.off = self.ref + max(self.h, 0.0) - pose.alt
                 self.flare = False
                 self.cool = 3.0
-            elif self.h <= 0.0:                                   # touchdown
+            elif self.h <= 0.8:                                   # touchdown
                 self.h = 0.0
                 self.flare = False
                 self.landed = True
