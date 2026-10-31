@@ -193,6 +193,7 @@ class Dashboard:
         self._update_win: tk.Toplevel | None = None
         self._update_cancel = False
         self._checking = False
+        self._installing = False
         self._build_styles()
         self._build_header()
         self._build_stats()
@@ -200,7 +201,7 @@ class Dashboard:
         self._build_log()
 
         # Folders left behind by a previous in-app update can be deleted now
-        app_update.cleanup_old()
+        self._cleanup_leftovers()
 
         # Kick off catalog scan in background
         threading.Thread(target=self._scan_catalog, daemon=True).start()
@@ -790,6 +791,18 @@ class Dashboard:
                                  tags=tags)
 
     # ── updates ─────────────────────────────────────────────────────────────
+    def _cleanup_leftovers(self, attempt: int = 0):
+        """Delete the previous EXE after an in-app update.
+
+        The new process starts before the old one has fully exited, and Windows
+        keeps the renamed ``.old`` file locked until then. Retry a few times
+        instead of leaving it on disk until the next launch.
+        """
+        stuck = app_update.cleanup_old()
+        if stuck and attempt < 4:
+            delay = 2000 if attempt < 2 else 8000
+            self.root.after(delay, lambda: self._cleanup_leftovers(attempt + 1))
+
     def _start_update_check(self):
         threading.Thread(target=self._update_check_worker, daemon=True).start()
 
@@ -949,10 +962,14 @@ class Dashboard:
             .pack(anchor="w", pady=(8, 0))
 
         win.protocol("WM_DELETE_WINDOW", self._close_update_dialog)
-        win.grab_set()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
 
     def _close_update_dialog(self):
         self._update_cancel = True
+        self._installing = False
         if self._update_win is not None:
             try:
                 self._update_win.grab_release()
@@ -970,8 +987,9 @@ class Dashboard:
 
     def _install_update(self):
         info = self._update_info
-        if not info:
+        if not info or getattr(self, "_installing", False):
             return
+        self._installing = True
         self._update_cancel = False
         self.btn_upd_install.configure(state="disabled",
                                        text="Downloading…")
@@ -991,7 +1009,6 @@ class Dashboard:
                 return
             self._ui(lambda: self._set_update_status(
                 "Verified. Preparing the new build…"))
-
             if not app_update.is_frozen():
                 saved = app_update.save_zip_for_manual_install(zip_path)
                 app_update.open_folder(os.path.dirname(saved))
@@ -999,6 +1016,8 @@ class Dashboard:
                 return
 
             new_exe = app_update.prepare_new_exe(zip_path)
+            if self._update_cancel:
+                return
             self._ui(lambda: self._set_update_status(
                 "Installing - the app will restart…"))
             # Stop injecting first so the old instance releases its sim
@@ -1009,6 +1028,8 @@ class Dashboard:
                     time.sleep(0.6)
             except Exception:
                 pass
+            if self._update_cancel:
+                return
             app_update.install_and_restart(new_exe)
         except app_update.UpdateError as e:
             if str(e) == "cancelled":
@@ -1020,9 +1041,6 @@ class Dashboard:
             return
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-
-        # The replacement process is starting; close this instance.
-        self._ui(self.root.destroy)
 
         # The replacement process is starting; close this instance.
         self._ui(self.root.destroy)
@@ -1049,6 +1067,7 @@ class Dashboard:
             self.upd_status.set(text)
 
     def _finish_manual(self, saved: str):
+        self._installing = False
         if self._update_win is not None and self._update_win.winfo_exists():
             self.upd_prog.configure(value=100)
             self.upd_status.set(f"Saved to {saved} - extract it over the app.")
@@ -1056,16 +1075,21 @@ class Dashboard:
                                            command=self._close_update_dialog)
 
     def _update_failed(self, message: str):
+        self._installing = False
         if self._update_win is not None and self._update_win.winfo_exists():
             self.upd_status.set(
                 f"Update failed: {message} "
-                "You can still download it from the release page.")
+                "You can still download it from the release page "
+                "(Release notes button).")
             self.btn_upd_install.configure(state="normal",
                                            text="Retry download")
         self._log(f"[Update] {message}", "err")
 
     # ── close ───────────────────────────────────────────────────────────────
     def _on_close(self):
+        # Abort an in-flight update first: closing the window must never let a
+        # download finish in the background and swap the EXE behind the user.
+        self._update_cancel = True
         if self.runner.running:
             self.runner.stop()
             # Give the worker a moment to clean up sim objects

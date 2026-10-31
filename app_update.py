@@ -265,18 +265,31 @@ def install_and_restart(new_exe: str) -> None:
             "Could not place the new build. The old version has been kept.") from e
 
     try:
-        subprocess.Popen([exe], close_fds=True)
+        subprocess.Popen([exe], cwd=os.path.dirname(exe), close_fds=True)
     except Exception as e:
         raise UpdateError(f"Could not restart the app: {e}") from e
 
 
-def cleanup_old() -> None:
-    """Remove leftovers from a previous in-app update. Safe to call always."""
+def cleanup_old() -> list[str]:
+    """Remove leftovers from a previous in-app update.
+
+    Returns the paths that could not be removed yet (Windows keeps the
+    previous EXE locked while the old process is still shutting down, so the
+    caller retries a few seconds later). Safe to call always.
+    """
     if not is_frozen():
-        return
+        return []
     base = os.path.dirname(os.path.abspath(sys.executable))
-    for suffix in (".old", ".new"):
-        _silent_remove(os.path.join(base, EXE_NAME + suffix))
+    stuck: list[str] = []
+    for name in (EXE_NAME + ".old", EXE_NAME + ".new"):
+        path = os.path.join(base, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            stuck.append(path)
+    return stuck
 
 
 def save_zip_for_manual_install(zip_path: str) -> str:

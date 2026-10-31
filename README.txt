@@ -76,7 +76,9 @@ New in v1.9
       GitHub before anything is unpacked;
     * on Windows the running EXE is renamed aside, the new one is moved
       into place and the app restarts itself; the leftover file is
-      deleted on the next start. If anything fails, the old EXE is put
+      deleted as soon as the old process has exited (the new build
+      retries for a few seconds if Windows still has it locked), so no
+      duplicate builds pile up. If anything fails, the old EXE is put
       back and the error is shown instead of leaving a broken install;
     * if the app is started from source (python elevatex_dashboard.py)
       the zip is saved to Downloads and the folder is opened, so the
