@@ -24,7 +24,7 @@ import zipfile
 from typing import Callable, Optional
 
 # Bump this for every release. The release tag on GitHub must match it.
-CURRENT_VERSION = "1.13"
+CURRENT_VERSION = "1.14"
 
 REPO = "FreedomStrider39/elevatex-traffic-injector"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"

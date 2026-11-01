@@ -751,7 +751,7 @@ class AttitudeModel:
         if self.hr is None:
             self.hr = pose.hdg_rate
         else:
-            self.hr += (pose.hdg_rate - self.hr) * (1.0 - math.exp(-dt / 0.6))
+            self.hr += (pose.hdg_rate - self.hr) * (1.0 - math.exp(-dt / 1.0))
         target_bank = max(-30.0, min(30.0, self.hr * (7.0 + gs / 150.0)))
         if agl is not None and agl < GROUND_AGL_FT:               # on/near the runway
             target_bank = 0.0
@@ -760,7 +760,7 @@ class AttitudeModel:
         if self.bank is None:
             self.bank = target_bank
         else:
-            self.bank = _slew(self.bank, target_bank, dt, 0.6, 12.0, 12.0)
+            self.bank = _slew(self.bank, target_bank, dt, 0.9, 8.0, 8.0)
         return self.pitch, self.bank, alt_out
 
 

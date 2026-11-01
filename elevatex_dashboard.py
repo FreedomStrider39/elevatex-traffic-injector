@@ -111,6 +111,15 @@ def _config_set(key, value) -> None:
         pass
 
 
+def _load_model_overrides() -> dict:
+    value = _config_get("model_overrides", {})
+    return value if isinstance(value, dict) else {}
+
+
+def _save_model_overrides(overrides: dict) -> None:
+    _config_set("model_overrides", overrides)
+
+
 def _tips_seen() -> bool:
     try:
         with open(_config_path(), "r", encoding="utf-8") as f:
@@ -815,6 +824,21 @@ class Dashboard:
             pass
 
         try:
+            s.configure("TCombobox", fieldbackground=RAISED, background=RAISED,
+                        foreground=TEXT, arrowcolor=TEXT, bordercolor=BORDER,
+                        lightcolor=BORDER, darkcolor=BORDER, padding=4)
+            s.map("TCombobox",
+                  fieldbackground=[("readonly", RAISED), ("!disabled", RAISED),
+                                   ("active", RAISED), ("focus", RAISED)],
+                  background=[("readonly", RAISED), ("active", RAISED),
+                              ("focus", RAISED)],
+                  foreground=[("readonly", TEXT), ("active", TEXT)],
+                  selectbackground=[("readonly", RAISED)],
+                  selectforeground=[("readonly", TEXT)])
+        except Exception:
+            pass
+
+        try:
             s.configure("Accent.Horizontal.TProgressbar", background=ACCENT,
                         troughcolor=RAISED, bordercolor=RAISED,
                         lightcolor=ACCENT, darkcolor=ACCENT, thickness=6)
@@ -943,10 +967,10 @@ class Dashboard:
 
         def section(text):
             tk.Label(content, text=text, font=FONT_LABEL, bg=SURFACE,
-                     fg=MUTED).pack(anchor="w", pady=(0, 10))
+                     fg=MUTED).pack(anchor="w", pady=(0, 8))
 
         def divider():
-            tk.Frame(content, bg=BORDER, height=1).pack(fill="x", pady=14)
+            tk.Frame(content, bg=BORDER, height=1).pack(fill="x", pady=8)
 
         # ── CONFIGURATION ──
         section("CONFIGURATION")
@@ -956,7 +980,7 @@ class Dashboard:
         for label, var, frm, to in [("Search radius", self.var_radius, 5, 200),
                                     ("Max aircraft", self.var_max, 1, 200)]:
             row = tk.Frame(content, bg=SURFACE)
-            row.pack(fill="x", pady=(0, 8))
+            row.pack(fill="x", pady=(0, 6))
             tk.Label(row, text=label, font=FONT_SMALL, bg=SURFACE,
                      fg=TEXT).pack(side="left")
             Stepper(row, var, frm, to).pack(side="right")
@@ -984,7 +1008,7 @@ class Dashboard:
                              bg=RAISED, fg=TEXT, insertbackground=ACCENT,
                              relief="flat", bd=0, font=FONT_UI,
                              highlightthickness=0)
-        uid_entry.pack(fill="x", padx=10, pady=7)
+        uid_entry.pack(fill="x", padx=10, pady=6)
 
         status_row = tk.Frame(content, bg=SURFACE)
         status_row.pack(fill="x", pady=(6, 0))
@@ -1000,11 +1024,19 @@ class Dashboard:
                                         wraplength=248)
         self.user_status_lbl.pack(anchor="w", pady=(2, 0))
 
-        tk.Label(content,
-                 text="Your own aircraft is excluded while you fly on "
-                      "ElevateX. Leave empty to inject all traffic.",
-                 font=FONT_TINY, bg=SURFACE, fg=MUTED, justify="left",
-                 wraplength=248).pack(anchor="w", pady=(6, 0))
+        def _sync_user_status(*_args):
+            # Only take up a line when there is something to say (verification
+            # status), so the sidebar does not get squished when idle.
+            try:
+                if self.var_user_status.get().strip():
+                    if not self.user_status_lbl.winfo_manager():
+                        self.user_status_lbl.pack(anchor="w", pady=(2, 0))
+                else:
+                    self.user_status_lbl.pack_forget()
+            except Exception:
+                pass
+
+        self.var_user_status.trace_add("write", _sync_user_status)
 
         divider()
 
@@ -1021,6 +1053,13 @@ class Dashboard:
                                      height=30, width=140, radius=8,
                                      font=FONT_SMALL)
         self.btn_folder.pack(anchor="w")
+
+        self.btn_models = PillButton(content, text="Model matching…",
+                                     command=self._show_model_matching,
+                                     bg=RAISED, fg=TEXT, hover="#242830",
+                                     height=30, width=140, radius=8,
+                                     font=FONT_SMALL)
+        self.btn_models.pack(anchor="w", pady=(6, 0))
 
         # ── right: table + activity ──
         right = tk.Frame(main, bg=BG)
@@ -1164,6 +1203,7 @@ class Dashboard:
             saved = custom_path or _load_saved_community()
             self.catalog = ModelCatalog(
                 custom_community_path=saved or None)
+            self.catalog.overrides = _load_model_overrides()
             n = sum(len(v) for v in self.catalog.models_by_icao.values())
             types = len(self.catalog.models_by_icao)
             if self.catalog.fsltl_found:
@@ -1406,6 +1446,25 @@ class Dashboard:
             if rows:
                 self.tree_empty.place_forget()
             else:
+                n_near = 0
+                for f in feed_map.values():
+                    if haversine_distance_nm(
+                            inj.user_lat, inj.user_lon,
+                            f.position.latitude,
+                            f.position.longitude) <= inj.radius_nm:
+                        n_near += 1
+                if n_near:
+                    # The injector deliberately waits for a second position
+                    # sample before spawning a MOVING aircraft (otherwise it
+                    # would pop in and slide backwards). Say so instead of
+                    # leaving an empty table that looks broken.
+                    self.tree_empty.configure(
+                        text=f"Waiting for a second position sample… "
+                             f"({n_near} nearby)")
+                else:
+                    self.tree_empty.configure(
+                        text=f"No ElevateX flights within "
+                             f"{inj.radius_nm:.0f} NM")
                 self.tree_empty.place(relx=0.5, rely=0.5, anchor="center")
         except Exception:
             pass
@@ -1435,6 +1494,155 @@ class Dashboard:
             else:
                 self.tree.insert("", "end", iid=r[0], values=display,
                                  tags=tags)
+
+    # ── model matching ───────────────────────────────────────────────────────
+    def _show_model_matching(self):
+        if self.catalog is None:
+            messagebox.showinfo("Model matching",
+                                "The model catalog is still scanning.",
+                                parent=self.root)
+            return
+        cat = self.catalog
+        win = tk.Toplevel(self.root)
+        win.title("Model matching")
+        win.configure(bg=BG)
+        win.geometry("700x560")
+        win.transient(self.root)
+        try:
+            win.update_idletasks()
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - 700) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - 560) // 2
+            win.geometry(f"700x560+{max(0, x)}+{max(0, y)}")
+            _enable_dark_titlebar(win)
+        except Exception:
+            pass
+
+        head = tk.Frame(win, bg=BG)
+        head.pack(fill="x", padx=18, pady=(16, 6))
+        tk.Label(head, text="Model matching", font=("Segoe UI", 14, "bold"),
+                 bg=BG, fg=TEXT).pack(anchor="w")
+        tk.Label(head, text="Automatic matching is used unless a type is "
+                            "overridden here. Overrides apply to aircraft "
+                            "spawned from now on.",
+                 font=FONT_SMALL, bg=BG, fg=MUTED, anchor="w",
+                 justify="left", wraplength=650).pack(anchor="w", pady=(4, 0))
+
+        # Existing overrides
+        tk.Label(win, text="YOUR OVERRIDES", font=FONT_LABEL, bg=BG,
+                 fg=MUTED).pack(anchor="w", padx=18, pady=(10, 4))
+        listbox = tk.Listbox(win, height=6, bg=SURFACE, fg=INFO, bd=0,
+                             highlightthickness=1, highlightbackground=BORDER,
+                             selectbackground=RAISED, selectforeground=TEXT,
+                             font=FONT_SMALL, activestyle="none")
+        listbox.pack(fill="x", padx=18)
+        keys = []
+
+        def refresh_list():
+            listbox.delete(0, "end")
+            keys.clear()
+            for k, v in sorted(cat.overrides.items()):
+                keys.append(k)
+                target = v.split(":", 1)[1]
+                if v.startswith("title:"):
+                    label = target
+                else:
+                    label = f"{target} (airline paint)"
+                listbox.insert("end", f"  {k}  →  {label}")
+
+        def remove_selected():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            key = keys[sel[0]]
+            cat.overrides.pop(key, None)
+            _save_model_overrides(cat.overrides)
+            refresh_list()
+
+        PillButton(win, text="Remove selected", command=remove_selected,
+                   bg=RAISED, fg=TEXT, hover="#242830", height=28, width=140,
+                   radius=8, font=FONT_SMALL).pack(anchor="w", padx=18,
+                                                   pady=(6, 10))
+
+        # Add / replace form
+        tk.Label(win, text="ADD OR REPLACE", font=FONT_LABEL, bg=BG,
+                 fg=MUTED).pack(anchor="w", padx=18, pady=(4, 6))
+        form = tk.Frame(win, bg=BG)
+        form.pack(fill="x", padx=18)
+
+        def label(text, row):
+            tk.Label(form, text=text, font=FONT_SMALL, bg=BG, fg=TEXT,
+                     anchor="w").grid(row=row, column=0, sticky="w",
+                                      pady=(0, 6))
+
+        common = ["A320", "A21N", "B738", "B752", "B753", "MD88", "B772",
+                  "B77W", "A359", "A388", "E190", "CRJ9", "AT76", "DH8D"]
+        feed_types = set(common) | set(cat.models_by_icao)
+        try:
+            inj = self.runner.injector
+            if inj:
+                for f in inj.feed.snapshot():
+                    feed_types.add(f.aircraft_icao.upper())
+        except Exception:
+            pass
+
+        label("When the feed says:", 0)
+        feed_var = tk.StringVar()
+        feed_box = ttk.Combobox(form, textvariable=feed_var, style="Dark.TCombobox",
+                                values=sorted(feed_types), width=18)
+        feed_box.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=(0, 6))
+
+        label("Use this type:", 1)
+        type_var = tk.StringVar()
+        targets = sorted(cat.models_by_icao)
+        type_box = ttk.Combobox(form, textvariable=type_var, style="Dark.TCombobox",
+                                values=targets, state="readonly", width=18)
+        type_box.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=(0, 6))
+
+        label("Livery:", 2)
+        livery_var = tk.StringVar(value="Automatic (airline paint)")
+        livery_box = ttk.Combobox(form, textvariable=livery_var,
+                                  style="Dark.TCombobox", width=52)
+        livery_box.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=(0, 6))
+
+        def fill_liveries(_evt=None):
+            fam = type_var.get()
+            titles = [t for t, _a, _i in cat.models_by_icao.get(fam, [])]
+            livery_box.configure(values=["Automatic (airline paint)"] + titles)
+            livery_var.set("Automatic (airline paint)")
+
+        type_box.bind("<<ComboboxSelected>>", fill_liveries)
+        if targets:
+            type_box.set(targets[0])
+            fill_liveries()
+
+        def save():
+            feed = feed_var.get().strip().upper()
+            fam = type_var.get().strip()
+            if not feed or not fam:
+                messagebox.showwarning("Model matching",
+                                       "Choose a feed type and a model type.",
+                                       parent=win)
+                return
+            livery = livery_var.get().strip()
+            if livery and livery != "Automatic (airline paint)":
+                value = "title:" + livery
+            else:
+                value = "type:" + fam
+            cat.overrides[feed] = value
+            _save_model_overrides(cat.overrides)
+            refresh_list()
+            self._log(f"[Model] {feed} will now use {value.split(':', 1)[1]}.")
+
+        btnrow = tk.Frame(win, bg=BG)
+        btnrow.pack(fill="x", padx=18, pady=(12, 14))
+        PillButton(btnrow, text="Save override", command=save, bg=ACCENT,
+                   fg=ACCENT_FG, hover=ACCENT_HOVER, height=32, width=150,
+                   radius=9, font=FONT_BOLD).pack(side="left")
+        PillButton(btnrow, text="Close", command=win.destroy, bg=RAISED,
+                   fg=TEXT, hover="#242830", height=32, width=90, radius=8,
+                   font=FONT_SMALL).pack(side="right")
+
+        refresh_list()
 
     # ── first-run tips ──────────────────────────────────────────────────────
     def _check_fsltl_injector(self) -> bool:
@@ -1479,6 +1687,11 @@ class Dashboard:
              "or both will inject the same flights. If this shows 0 liveries, "
              "install the models or pick the folder with this button.",
              "right", self.side_panel),
+            (self.btn_models, "Model matching",
+             "Automatic matching always uses the exact type when it is "
+             "installed, then the closest model. This button is only the "
+             "manual override: pick a different type or livery for any "
+             "aircraft and it is remembered.", "right", self.side_panel),
             (self.btn_start, "Start injection",
              "Load your flight in MSFS first, then press Start. Traffic "
              "appears within about 30 seconds and follows the real pilots.",

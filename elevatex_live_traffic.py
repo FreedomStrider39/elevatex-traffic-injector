@@ -109,7 +109,7 @@ TRACK_INTERVAL_S = 0.033  # ~30 Hz target; smoothing is dt-based (frame-rate ind
 # Max heading change per second we allow when easing the nose toward the
 # (noisy) feed heading. Kills left-right jitter during taxi without making
 # turns look sluggish. PSXT/LiveTraffic smooth heading the same way.
-HDG_RATE_LIMIT_DPS = 18.0
+HDG_RATE_LIMIT_DPS = 12.0
 
 # MSFS body axes for VELOCITY BODY X/Y/Z: +X forward, +Y up, +Z right.
 # Velocity is measured from the per-tick position delta and rotated into this
@@ -506,6 +506,22 @@ MODEL_ALIASES = {
     "B74I": ["747"],
     "B762": ["767"],
     "B763": ["767"],
+    "B764": ["767"],
+    # Boeing 757 has no FSLTL model; use the closest narrowbody so the flight
+    # still appears instead of vanishing from the sky.
+    "B752": ["A321", "737"],
+    "B753": ["A321", "737"],
+    # MD-80/90 and DC-9 family: no FSLTL model either.
+    "MD81": ["A320", "737"],
+    "MD82": ["A320", "737"],
+    "MD83": ["A320", "737"],
+    "MD87": ["A320", "737"],
+    "MD88": ["A320", "737"],
+    "MD90": ["A320", "737"],
+    "DC93": ["A320", "737"],
+    "DC94": ["A320", "737"],
+    "DC95": ["A320", "737"],
+    "B712": ["E190", "CRJ7"],
     "A30B": ["TT:ATCCOM.AC_MODEL_A300.0.TEXT"],
     "A306": ["TT:ATCCOM.AC_MODEL_A300.0.TEXT"],
     "A310": ["TT:ATCCOM.AC_MODEL_A300.0.TEXT"],
@@ -621,6 +637,260 @@ AirlinerFallback = {
     "CRJX": ["CRJ7"],
 }
 
+# ---------------------------------------------------------------------------
+# Closest-model fallback.
+#
+# The FSLTL base does not contain every aircraft type, and some feeds use
+# types the base has never modelled (757, MD-80, ...). Rather than drop those
+# flights, pick the geometrically closest type that IS installed: similar
+# wingspan, length, seat count and class, preferring the same manufacturer.
+# Tuple: (wingspan m, length m, class, seats, engines, manufacturer)
+# ---------------------------------------------------------------------------
+AIRCRAFT_SPECS = {
+    # Installed family keys
+    "737": (35.8, 39.5, "narrow", 189, 2, "boeing"),
+    "B733": (28.9, 33.4, "narrow", 130, 2, "boeing"),
+    "B734": (28.9, 36.5, "narrow", 150, 2, "boeing"),
+    "747": (64.4, 70.6, "wide", 410, 4, "boeing"),
+    "767": (47.6, 54.9, "wide", 269, 2, "boeing"),
+    "777": (60.9, 73.9, "wide", 396, 2, "boeing"),
+    "787": (60.1, 62.8, "wide", 290, 2, "boeing"),
+    "A220": (35.1, 38.7, "narrow", 141, 2, "airbus"),
+    "A319": (35.8, 33.8, "narrow", 140, 2, "airbus"),
+    "A320": (35.8, 37.6, "narrow", 180, 2, "airbus"),
+    "A321": (35.8, 44.5, "narrow", 220, 2, "airbus"),
+    "A330": (60.3, 58.8, "wide", 277, 2, "airbus"),
+    "A343": (60.3, 63.7, "wide", 295, 4, "airbus"),
+    "A346": (63.4, 75.4, "wide", 380, 4, "airbus"),
+    "A350": (64.8, 66.8, "wide", 350, 2, "airbus"),
+    "A380": (79.8, 72.7, "wide", 555, 4, "airbus"),
+    "MD-11": (51.7, 61.6, "wide", 293, 3, "mcdonnell"),
+    "SU95": (27.8, 29.9, "regional", 98, 2, "sukhoi"),
+    "E170": (26.0, 29.9, "regional", 76, 2, "embraer"),
+    "E190": (28.7, 36.2, "regional", 100, 2, "embraer"),
+    "CRJ7": (23.2, 32.5, "regional", 78, 2, "bombardier"),
+    "ATR42": (24.6, 22.7, "turboprop", 48, 2, "atr"),
+    "ATR75": (27.1, 27.2, "turboprop", 72, 2, "atr"),
+    "ATR76": (27.1, 27.2, "turboprop", 72, 2, "atr"),
+    "DASH 8": (27.4, 32.8, "turboprop", 70, 2, "dehavilland"),
+    "SAAB 340": (21.4, 19.7, "turboprop", 34, 2, "saab"),
+    "CHEROKEE": (10.9, 7.5, "ga", 4, 1, "piper"),
+    "LEARJET": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "VL3": (7.9, 6.2, "light", 2, 1, "vl3"),
+    # Feed types
+    "A318": (34.1, 31.4, "narrow", 120, 2, "airbus"),
+    "A19N": (35.8, 33.8, "narrow", 140, 2, "airbus"),
+    "A20N": (35.8, 37.6, "narrow", 180, 2, "airbus"),
+    "A21N": (35.8, 44.5, "narrow", 220, 2, "airbus"),
+    "A332": (60.3, 58.8, "wide", 277, 2, "airbus"),
+    "A333": (60.3, 63.7, "wide", 295, 2, "airbus"),
+    "A338": (64.0, 63.7, "wide", 300, 2, "airbus"),
+    "A339": (64.0, 63.7, "wide", 300, 2, "airbus"),
+    "A342": (60.3, 59.4, "wide", 260, 4, "airbus"),
+    "A345": (63.4, 67.9, "wide", 320, 4, "airbus"),
+    "A358": (64.8, 60.5, "wide", 310, 2, "airbus"),
+    "A359": (64.8, 66.8, "wide", 350, 2, "airbus"),
+    "A35K": (64.8, 73.8, "wide", 410, 2, "airbus"),
+    "A388": (79.8, 72.7, "wide", 555, 4, "airbus"),
+    "B37M": (35.9, 35.6, "narrow", 170, 2, "boeing"),
+    "B38M": (35.9, 39.5, "narrow", 189, 2, "boeing"),
+    "B39M": (35.9, 42.1, "narrow", 220, 2, "boeing"),
+    "B736": (34.3, 31.2, "narrow", 110, 2, "boeing"),
+    "B737": (34.3, 33.4, "narrow", 130, 2, "boeing"),
+    "B738": (35.8, 39.5, "narrow", 189, 2, "boeing"),
+    "B739": (35.8, 42.1, "narrow", 220, 2, "boeing"),
+    "B741": (59.6, 70.7, "wide", 370, 4, "boeing"),
+    "B742": (59.6, 70.7, "wide", 370, 4, "boeing"),
+    "B743": (59.6, 70.7, "wide", 400, 4, "boeing"),
+    "B744": (64.4, 70.6, "wide", 410, 4, "boeing"),
+    "B748": (68.5, 76.3, "wide", 467, 4, "boeing"),
+    "B752": (38.0, 47.3, "narrow", 200, 2, "boeing"),
+    "B753": (38.0, 54.5, "narrow", 243, 2, "boeing"),
+    "B762": (47.6, 48.5, "wide", 220, 2, "boeing"),
+    "B763": (47.6, 54.9, "wide", 269, 2, "boeing"),
+    "B764": (51.9, 61.4, "wide", 304, 2, "boeing"),
+    "B772": (60.9, 63.7, "wide", 312, 2, "boeing"),
+    "B773": (60.9, 73.9, "wide", 396, 2, "boeing"),
+    "B77L": (64.8, 63.7, "wide", 317, 2, "boeing"),
+    "B77W": (64.8, 73.9, "wide", 396, 2, "boeing"),
+    "B788": (60.1, 56.7, "wide", 250, 2, "boeing"),
+    "B789": (60.1, 62.8, "wide", 290, 2, "boeing"),
+    "B78X": (60.1, 68.3, "wide", 330, 2, "boeing"),
+    "MD81": (32.9, 45.1, "narrow", 155, 2, "mcdonnell"),
+    "MD82": (32.9, 45.1, "narrow", 155, 2, "mcdonnell"),
+    "MD83": (32.9, 45.1, "narrow", 165, 2, "mcdonnell"),
+    "MD87": (32.9, 45.1, "narrow", 130, 2, "mcdonnell"),
+    "MD88": (32.9, 45.1, "narrow", 155, 2, "mcdonnell"),
+    "MD90": (32.9, 46.5, "narrow", 172, 2, "mcdonnell"),
+    "DC93": (28.4, 36.6, "narrow", 115, 2, "mcdonnell"),
+    "DC94": (32.9, 37.8, "narrow", 125, 2, "mcdonnell"),
+    "DC95": (32.9, 40.7, "narrow", 130, 2, "mcdonnell"),
+    "B712": (28.5, 37.8, "regional", 100, 2, "boeing"),
+    "CRJ2": (21.2, 26.8, "regional", 50, 2, "bombardier"),
+    "CRJ9": (24.9, 36.4, "regional", 90, 2, "bombardier"),
+    "CRJX": (26.2, 39.1, "regional", 104, 2, "bombardier"),
+    "E175": (26.0, 31.7, "regional", 88, 2, "embraer"),
+    "E195": (28.7, 38.6, "regional", 118, 2, "embraer"),
+    "E75L": (26.0, 31.7, "regional", 88, 2, "embraer"),
+    "E75S": (26.0, 31.7, "regional", 88, 2, "embraer"),
+    "AT42": (24.6, 22.7, "turboprop", 48, 2, "atr"),
+    "AT43": (24.6, 22.7, "turboprop", 48, 2, "atr"),
+    "AT45": (24.6, 22.7, "turboprop", 48, 2, "atr"),
+    "AT46": (24.6, 22.7, "turboprop", 48, 2, "atr"),
+    "AT72": (27.1, 27.2, "turboprop", 72, 2, "atr"),
+    "AT75": (27.1, 27.2, "turboprop", 72, 2, "atr"),
+    "DH8A": (25.9, 22.3, "turboprop", 39, 2, "dehavilland"),
+    "DH8B": (25.9, 22.3, "turboprop", 39, 2, "dehavilland"),
+    "DH8C": (27.4, 25.7, "turboprop", 50, 2, "dehavilland"),
+    "DH8D": (27.4, 32.8, "turboprop", 70, 2, "dehavilland"),
+    "SF34": (21.4, 19.7, "turboprop", 34, 2, "saab"),
+    "BE20": (16.6, 13.4, "turboprop", 9, 2, "beechcraft"),
+    "B350": (17.7, 14.4, "turboprop", 11, 2, "beechcraft"),
+    "PC12": (16.3, 14.4, "turboprop", 6, 1, "pilatus"),
+    "C208": (15.9, 11.7, "ga", 12, 1, "cessna"),
+    "C172": (11.0, 8.3, "ga", 4, 1, "cessna"),
+    "C25A": (15.7, 14.4, "bizjet", 8, 2, "cessna"),
+    "C25B": (15.7, 14.4, "bizjet", 8, 2, "cessna"),
+    "C25C": (15.7, 14.4, "bizjet", 8, 2, "cessna"),
+    "C56X": (17.2, 15.9, "bizjet", 9, 2, "cessna"),
+    "C700": (19.3, 17.8, "bizjet", 10, 2, "cessna"),
+    "C750": (19.3, 17.8, "bizjet", 10, 2, "cessna"),
+    "LJ25": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "LJ35": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "LJ45": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "LJ55": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "LJ60": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "LJ75": (13.7, 14.8, "bizjet", 8, 2, "learjet"),
+    "CL60": (19.6, 20.9, "bizjet", 12, 2, "bombardier"),
+    "TBM7": (12.8, 10.7, "turboprop", 6, 1, "daher"),
+    "TBM8": (12.8, 10.7, "turboprop", 6, 1, "daher"),
+    "TBM9": (12.8, 10.7, "turboprop", 6, 1, "daher"),
+    "PA28": (10.9, 7.5, "ga", 4, 1, "piper"),
+    "PA32": (12.2, 8.6, "ga", 6, 1, "piper"),
+    "PA44": (11.8, 8.4, "ga", 4, 2, "piper"),
+    "DA40": (12.0, 8.0, "ga", 4, 1, "diamond"),
+    "DA62": (14.5, 9.2, "ga", 7, 2, "diamond"),
+    "DR40": (8.7, 7.0, "ga", 4, 1, "robin"),
+    "SF50": (11.7, 9.4, "bizjet", 7, 1, "cirrus"),
+    "PC24": (17.0, 16.8, "bizjet", 10, 2, "pilatus"),
+    "A30B": (44.8, 54.0, "wide", 266, 2, "airbus"),
+    "A306": (44.8, 54.0, "wide", 266, 2, "airbus"),
+    "A310": (43.9, 46.7, "wide", 220, 2, "airbus"),
+    "BE36": (10.2, 8.4, "ga", 4, 1, "beechcraft"),
+    "SR22": (11.7, 7.9, "ga", 4, 1, "cirrus"),
+    "SR20": (11.7, 7.9, "ga", 4, 1, "cirrus"),
+}
+
+_TT_SPEC_RE = re.compile(r"AC_MODEL[ _]([A-Z0-9 .-]+?)\.0", re.I)
+
+
+def _spec_code(code: str) -> str:
+    """Normalize a catalog key / ICAO code; unwrap MSFS 'TT:ATCCOM...' keys."""
+    text = (code or "").strip()
+    if text.upper().startswith("TT:ATCCOM"):
+        m = _TT_SPEC_RE.search(text)
+        if m:
+            return m.group(1).strip().upper()
+    return text.upper()
+
+
+def _spec_for(code: str):
+    """(span, length, class, seats, engines, maker) for a type, or None."""
+    c = _spec_code(code)
+    spec = AIRCRAFT_SPECS.get(c)
+    if spec:
+        return spec
+    # Family inference for types that are not in the table (new variants etc.)
+    if c.startswith(("B73", "B37", "B38", "B39")):
+        return AIRCRAFT_SPECS["737"]
+    if c.startswith("B74"):
+        return AIRCRAFT_SPECS["747"]
+    if c.startswith("B75"):
+        return AIRCRAFT_SPECS["B752"]
+    if c.startswith("B76"):
+        return AIRCRAFT_SPECS["767"]
+    if c.startswith("B77"):
+        return AIRCRAFT_SPECS["777"]
+    if c.startswith("B78"):
+        return AIRCRAFT_SPECS["787"]
+    if c.startswith("A31"):
+        return AIRCRAFT_SPECS["A319"]
+    if c.startswith("A32"):
+        return AIRCRAFT_SPECS["A320"]
+    if c.startswith("A33"):
+        return AIRCRAFT_SPECS["A330"]
+    if c.startswith("A34"):
+        return AIRCRAFT_SPECS["A343"]
+    if c.startswith("A35"):
+        return AIRCRAFT_SPECS["A350"]
+    if c.startswith("A38"):
+        return AIRCRAFT_SPECS["A380"]
+    if c.startswith(("E17", "E19", "E7")):
+        return AIRCRAFT_SPECS["E190"]
+    if c.startswith("CRJ"):
+        return AIRCRAFT_SPECS["CRJ7"]
+    if c.startswith(("RJ", "B46", "F70", "F10", "F50", "E13", "E14", "ERJ")):
+        return AIRCRAFT_SPECS["CRJ7"]
+    if c.startswith(("IL7", "IL8", "IL9", "C17", "C5", "KC1", "AN1", "AN2",
+                     "A40")):
+        return AIRCRAFT_SPECS["767"]
+    if c.startswith(("C13", "CN35", "C30")):
+        return AIRCRAFT_SPECS["ATR76"]
+    if c.startswith(("GLF", "GLEX", "G55", "G65", "FA7", "FA8", "F900",
+                     "E55", "E50", "HDJT", "C68", "C56")):
+        return AIRCRAFT_SPECS["C25C"]
+    if c.startswith(("MD8", "MD9", "DC9")):
+        return AIRCRAFT_SPECS["MD88"]
+    if c.startswith("AT"):
+        return AIRCRAFT_SPECS["ATR76"]
+    if c.startswith("DH8"):
+        return AIRCRAFT_SPECS["DASH 8"]
+    return None
+
+
+def _type_distance(a, b) -> float:
+    """How far apart two aircraft specs are (0 = identical)."""
+    def lr(x, y):
+        return math.log(max(x, 1.0) / max(y, 1.0)) / 0.22
+
+    d = lr(a[0], b[0]) ** 2 + lr(a[1], b[1]) ** 2
+    d += ((a[3] - b[3]) / 90.0) ** 2
+    if a[2] != b[2]:
+        pair = {a[2], b[2]}
+        if pair <= {"wide", "narrow"}:
+            d += 1.6
+        elif pair <= {"narrow", "regional"}:
+            d += 0.7
+        elif pair <= {"regional", "turboprop"}:
+            d += 0.7
+        elif pair <= {"bizjet", "ga", "light"}:
+            d += 0.8
+        else:
+            d += 2.5
+    if a[4] != b[4]:
+        d += 0.6
+    if a[5] != b[5]:
+        d += 0.25
+    return d
+
+
+def nearest_available_type(icao: str, models_by_icao):
+    """Closest type that is actually installed, or None."""
+    target = _spec_for(icao)
+    if target is None:
+        return None
+    best, best_d = None, None
+    for key, liveries in models_by_icao.items():
+        if not liveries:
+            continue
+        spec = _spec_for(key)
+        if spec is None:
+            continue
+        d = _type_distance(target, spec)
+        if best_d is None or d < best_d:
+            best, best_d = key, d
+    return best
+
 # FSLTL livery titles: FSLTL_<TYPE>_<AIRLINE-CODE>_<Name>-STUB
 _FSLTL_TITLE_RE = re.compile(r"^FSLTL_[A-Z0-9]+_([A-Z0-9]{3})_")
 
@@ -658,6 +928,8 @@ class ModelCatalog:
 
     def __init__(self, custom_community_path: Optional[str] = None):
         self.models_by_icao: Dict[str, List[Tuple[str, str, str]]] = {}  # icao -> [(title, atc_airline, icao_airline)]
+        self.overrides: Dict[str, str] = {}  # feed ICAO -> "type:<family>" or "title:<exact>"
+        self.title_index: Dict[str, str] = {}  # title -> ICAO family key
         self.scanned_packages: List[str] = []
         self.fsltl_found: bool = False
         self.custom_community_path = custom_community_path
@@ -873,6 +1145,31 @@ class ModelCatalog:
         except Exception as e:
             pass
 
+        # Fast title lookup for manual overrides (title -> ICAO family key).
+        self.title_index = {}
+        for icao_key, liveries in self.models_by_icao.items():
+            for title, _atc, _icao_al in liveries:
+                self.title_index[title] = icao_key
+
+    def _pick_livery(self, livery_list, airline_targets, airline: str):
+        """Best livery in one type's list for the requested airline."""
+        if airline_targets - {""}:
+            for title, _atc_al, icao_al in livery_list:
+                if (icao_al in airline_targets
+                        or _livery_airline_code(title) in airline_targets):
+                    return title
+        if airline:
+            for title, atc_airline, _icao_al in livery_list:
+                if atc_airline and airline in atc_airline.split():
+                    return title
+        for title, _a, _i in livery_list:
+            if title.upper().endswith("_ZZZZ"):
+                return title
+        for title, _a, _i in livery_list:
+            if "STUB" not in title.upper():
+                return title
+        return livery_list[0][0]
+
     def get_best_model(self, icao_type: str, airline_code: str = "") -> Optional[Tuple[str, str]]:
         """
         Find best matching container title for an ICAO aircraft type and airline.
@@ -894,6 +1191,21 @@ class ModelCatalog:
         if not icao:
             return None
 
+        # Manual override (set in the dashboard's Model matching dialog).
+        override = self.overrides.get(icao)
+        if override:
+            if override.startswith("title:"):
+                title = override[6:]
+                family = self.title_index.get(title)
+                if family:
+                    return (title, family)
+            elif override.startswith("type:"):
+                family = override[5:]
+                liveries = self.models_by_icao.get(family)
+                if liveries:
+                    return (self._pick_livery(liveries, airline_targets,
+                                              airline), family)
+
         # Build prioritized list of ICAOs to try: direct hit + aliases
         candidates = [icao] if icao else []
         if icao in MODEL_ALIASES:
@@ -904,36 +1216,20 @@ class ModelCatalog:
         if icao in AirlinerFallback:
             candidates.extend(g for g in AirlinerFallback[icao] if g not in candidates)
 
+        # Last resort: the geometrically closest type that is installed. This
+        # keeps flights whose type FSLTL never modelled (757, MD-80, ...) in
+        # the sky instead of silently dropping them.
+        if not any(self.models_by_icao.get(c) for c in candidates):
+            nearest = nearest_available_type(icao, self.models_by_icao)
+            if nearest and nearest not in candidates:
+                candidates.append(nearest)
+
         for cand_icao in candidates:
             livery_list = self.models_by_icao.get(cand_icao)
             if not livery_list:
                 continue
-
-            # 1) Exact airline-code match (icao_airline field, or code parsed
-            #    from the FSLTL title in either naming format)
-            if airline_targets - {""}:
-                for title, _atc_al, icao_al in livery_list:
-                    if (icao_al in airline_targets
-                            or _livery_airline_code(title) in airline_targets):
-                        return (title, cand_icao)
-
-            # 2) atc_airline full-name match (contains feed code as a word)
-            if airline:
-                for title, atc_airline, _icao_al in livery_list:
-                    if atc_airline and airline in atc_airline.split():
-                        return (title, cand_icao)
-
-            # 3) Generic paint (ZZZZ) — the neutral, correct-type model
-            for title, _a, _i in livery_list:
-                if title.upper().endswith("_ZZZZ"):
-                    return (title, cand_icao)
-
-            # 4) Any real paint for this type (STUBs only as a last resort —
-            #    they are plain-white placeholders, still better than nothing)
-            for title, _a, _i in livery_list:
-                if "STUB" not in title.upper():
-                    return (title, cand_icao)
-            return (livery_list[0][0], cand_icao)
+            return (self._pick_livery(livery_list, airline_targets, airline),
+                    cand_icao)
 
         # No match found for this type - return None so we skip it rather
         # than injecting a wrong-model aircraft.
@@ -961,13 +1257,12 @@ class _DispatchSimConnect(PySimConnect):
         super().__init__(*args, **kwargs)
 
     def handle_exception_event(self, exc):
-        # Ignore the noisy "outside reality bubble" exception for distant AI aircraft
-        try:
-            if exc.dwException == SIMCONNECT_EXCEPTION.SIMCONNECT_EXCEPTION_OBJECT_OUTSIDE_REALITY_BUBBLE:
-                return
-        except Exception:
-            pass
-        super().handle_exception_event(exc)
+        # SimConnect routinely reports benign exceptions for injected AI
+        # (objects outside the reality bubble, transient AI-state errors).
+        # The base class turns each one into a scary "SIMCONNECT_EXCEPTION_*"
+        # line, which looked like a real failure in the log. They are not
+        # actionable, so they are dropped silently.
+        return
 
     def my_dispatch_proc(self, pData, cbData, pContext):
         try:
@@ -1010,6 +1305,7 @@ class ElevateXSimConnect:
         self._light_events = None
         self._write_fails: Dict[int, int] = {}  # object_id -> consecutive failures
         self._ground_req_fails = 0  # GROUND ALTITUDE request errors (warn once)
+        self._ground_def_failed = False  # definition creation failed (warn once)
         self._ground_ok_logged = False  # first successful terrain readback logged
 
     @property
@@ -1098,7 +1394,7 @@ class ElevateXSimConnect:
                 def_id = self.sm.new_def_id()
                 hr = self.sm.dll.AddToDataDefinition(
                     self.sm.hSimConnect,
-                    def_id,
+                    def_id.value,
                     b"GROUND ALTITUDE",
                     b"Feet",
                     SIMCONNECT_DATATYPE.SIMCONNECT_DATATYPE_FLOAT64,
@@ -1106,12 +1402,16 @@ class ElevateXSimConnect:
                     SIMCONNECT_UNUSED,
                 )
                 if not self.sm.IsHR(hr, 0):
+                    if not self._ground_def_failed:
+                        self._ground_def_failed = True
+                        print("[SimConnect] GROUND ALTITUDE definition failed "
+                              f"(hr=0x{hr & 0xFFFFFFFF:08X}); using feed elevation.")
                     return
                 self.sm.DEFINITION_GROUND = int(def_id.value)
             req = self.sm.new_request_id()
             hr = self.sm.dll.RequestDataOnSimObject(
                 self.sm.hSimConnect,
-                req,
+                req.value,
                 self.sm.DEFINITION_GROUND,
                 object_id,
                 SIMCONNECT_PERIOD.SIMCONNECT_PERIOD_ONCE,
@@ -1396,6 +1696,7 @@ class ActiveInjectedAircraft:
     smooth_hdg: Optional[float] = None
     smooth_pitch: Optional[float] = None  # smoothed attitude (deg) for banked turns / climbs
     smooth_bank: Optional[float] = None
+    course: Optional[float] = None  # smoothed course over ground (deg)
     ground_lock: float = 0.0  # 0..1 blend of rendered altitude onto the field elevation
     on_ground_latch: bool = False  # sticky on-ground state (survives feed noise)
     gear_down: Optional[bool] = None  # last commanded gear state (None = not yet sent)
@@ -1442,6 +1743,7 @@ class LiveTrafficInjector:
         self.my_elevatex_username = my_elevatex_username.strip()  # optional: ElevateX username
         self._username_check_state = None  # None | "missing" | "verified"
         self._my_callsign = ""  # callsign of the user's own flight (when found)
+        self._model_notes = set()  # (feed type, substituted type) already logged
         self.user_alt_ft = 0.0
         self.user_speed_kt = 0.0
 
@@ -1802,6 +2104,25 @@ class LiveTrafficInjector:
         selected_flights = nearby_flights[:self.max_aircraft]
         selected_ids = {f.id for _, f in selected_flights}
 
+        # If nothing is injected yet but flights are nearby, say WHY the sky is
+        # still empty: a moving aircraft is held back until its second feed
+        # sample arrives (so it does not pop in and slide backwards). Without
+        # this line an empty table for the first minute looks like a failure.
+        try:
+            with self.aircraft_lock:
+                none_active = not self.active_aircraft
+            if selected_flights and none_active and not self.dry_run:
+                now_w = time.monotonic()
+                if now_w - getattr(self, "_wait_note_t", 0.0) > 20.0:
+                    self._wait_note_t = now_w
+                    ready_n = sum(1 for _, f in selected_flights
+                                  if f.track.ready)
+                    print(f"[Injector] Waiting for position data: "
+                          f"{len(selected_flights)} flight(s) nearby, "
+                          f"{ready_n} ready to spawn.")
+        except Exception:
+            pass
+
         # Despawn aircraft that left radius / ended / got trimmed by the cap
         with self.aircraft_lock:
             to_remove = [fid for fid in self.active_aircraft if fid not in selected_ids]
@@ -1838,6 +2159,15 @@ class LiveTrafficInjector:
                     continue  # No matching ElevateX model available for this type
 
                 container_title, matched_icao = match
+                want_type = (flight.aircraft_icao or "").strip().upper()
+                got_type = (matched_icao or "").strip().upper()
+                if want_type and got_type and want_type != got_type:
+                    note = (want_type, got_type)
+                    if note not in self._model_notes:
+                        self._model_notes.add(note)
+                        print(f"[Model] No {want_type} model installed - "
+                              f"using the closest type ({got_type}) for "
+                              f"{flight.callsign}.")
 
                 # Spawn at the delayed-interpolation pose (on the curve,
                 # never at a predicted point). Skip this cycle if the
@@ -2175,7 +2505,37 @@ class LiveTrafficInjector:
                 active.smooth_bank = bank_deg
             else:
                 active.smooth_bank += ((bank_deg - active.smooth_bank)
-                                       * _smooth_factor(dt, 0.80))
+                                       * _smooth_factor(dt, 1.1))
+
+            # Course over ground = the direction of the position delta we are
+            # about to write. Writing the nose along the COURSE (rather than
+            # the sparse, noisy feed heading) keeps the aircraft pointing where
+            # it is actually going. Otherwise heading and motion differ by a
+            # few degrees, the sim integrates the lateral part of the velocity
+            # and the whole aircraft visibly slips sideways between writes.
+            coslat = max(math.cos(math.radians(lat)), 0.01)
+            dt_w = now - active.last_write_t if active.last_write_t else 0.0
+            v_n = v_e = 0.0
+            speed_ms = 0.0
+            if 0.004 < dt_w < 0.5 and active.last_lat:
+                v_n = (lat - active.last_lat) * 111320.0 / dt_w
+                v_e = (lon - active.last_lon) * 111320.0 * coslat / dt_w
+                speed_ms = math.hypot(v_n, v_e)
+
+            target_hdg = heading
+            using_course = False
+            if speed_ms > 15.0 and not on_ground:
+                using_course = True
+                course = math.degrees(math.atan2(v_e, v_n)) % 360.0
+                if active.course is None:
+                    active.course = course
+                else:
+                    d_c = ((course - active.course + 180.0) % 360.0) - 180.0
+                    active.course = (active.course
+                                     + d_c * _smooth_factor(dt, 0.35)) % 360.0
+                target_hdg = active.course
+            else:
+                active.course = None
 
             # Rate-limit the heading so noisy feed headings and the step at
             # each sample don't show up as a wiggling nose. PSXT 16.5 calls
@@ -2184,11 +2544,17 @@ class LiveTrafficInjector:
             # way round and cap the turn rate so taxi turns stay coordinated
             # instead of snapping.
             if active.smooth_hdg is None:
-                active.smooth_hdg = heading
+                active.smooth_hdg = target_hdg
             else:
-                dh = ((heading - active.smooth_hdg + 180.0) % 360.0) - 180.0
+                dh = ((target_hdg - active.smooth_hdg + 180.0) % 360.0) - 180.0
+                # Deadband: a fraction of a degree of feed heading noise used to
+                # make the nose twitch left/right every frame. Ignore it.
+                if abs(dh) < 0.15:
+                    dh = 0.0
                 lim = HDG_RATE_LIMIT_DPS * dt
-                step = dh * _smooth_factor(dt, 0.5)
+                # The course already comes from the smooth rendered path, so
+                # it needs almost no extra lag; the feed heading does.
+                step = dh * _smooth_factor(dt, 0.2 if using_course else 0.8)
                 active.smooth_hdg = (active.smooth_hdg
                                      + max(-lim, min(lim, step))) % 360.0
             heading = active.smooth_hdg
@@ -2205,11 +2571,7 @@ class LiveTrafficInjector:
             # AttitudeModel output, not the raw feed altitude), removing the
             # vertical bob as well.
             vel_mps = None
-            dt_w = now - active.last_write_t if active.last_write_t else 0.0
             if 0.004 < dt_w < 0.5 and active.last_lat:
-                coslat = max(math.cos(math.radians(lat)), 0.01)
-                v_n = (lat - active.last_lat) * 111320.0 / dt_w
-                v_e = (lon - active.last_lon) * 111320.0 * coslat / dt_w
                 v_u = (alt_ft - active.last_alt) * 0.3048 / dt_w
                 if on_ground:
                     # Wheels down: never hand the sim a vertical velocity.

@@ -1,4 +1,4 @@
-﻿ElevateX Live Traffic Injector v1.13
+﻿ElevateX Live Traffic Injector v1.14
 ===================================
 Injects live ElevateX network traffic into MSFS 2024 as AI aircraft
 using FSLTL models via SimConnect.
@@ -57,12 +57,62 @@ header. It shows the release notes, downloads the package, verifies it
 against the published SHA-256, swaps the running EXE and restarts itself.
 Click the version number next to the logo to check manually at any time.
 
-Known bugs (v1.13)
+Known bugs (v1.14)
 -----------------
 - Pitch bug: nose-up/nose-down attitude during climbs and descents
   is still being tuned. The flight-path angle now uses the corrected
   speed unit (see below), which should already make it noticeably
   closer to the real attitude.
+
+New in v1.14
+------------
+- Ground height is finally read from the simulator. The per-aircraft
+  GROUND ALTITUDE request had never worked: the data definition was passed
+  a DWORD instead of its integer value, the error was swallowed, and the
+  app silently fell back to the feed's airport elevation. That is why
+  aircraft hovered ~2 m over some aprons. The readback now returns the real
+  surface (for example 1385 ft instead of 1417 ft at Zurich) and taxying
+  aircraft sit on the scenery.
+- Model matching rebuilt around one rule: exact first, closest only when
+  the exact type is not installed.
+    * exact ICAO type, then family aliases (A20N->A320, B38M->737,
+      CRJ9->CRJ7, ...);
+    * otherwise the geometrically closest installed model, scored on
+      wingspan, length, seats, class (widebody/narrowbody/regional/
+      turboprop/bizjet/GA), engine count and manufacturer;
+    * new fallbacks for types FSLTL does not ship: 757 -> A321, MD-80/90
+      and DC-9 -> A320, 717 -> E190, BAe 146 / RJ / Fokker -> CRJ7,
+      military transports -> 767, large turboprops -> ATR, bizjets -> C25C,
+      plus a family inference for types added to the feed later;
+    * livery selection inside the chosen type: exact airline -> airline
+      name -> generic paint -> any paint;
+    * every substitution is logged once, e.g.
+      "[Model] No B752 model installed - using the closest type (A321)".
+- Manual model matching (the JoinFS-style override). A "Model matching..."
+  button under FSLTL models opens a dialog where any feed type can be
+  pointed at a specific installed type and livery. Overrides are stored in
+  config.json (model_overrides) and apply to aircraft spawned from then on.
+  This is only the manual escape hatch; automatic matching remains exact
+  first.
+- No more sideways slip. Airborne above ~29 kt the written heading now
+  follows the course over ground taken from the position delta being
+  written, instead of the sparse feed heading. Nose and motion are the same
+  vector, so the body velocity has no lateral component for MSFS to
+  integrate between writes (that lateral push was the whole-aircraft
+  sideways shimmer). Ground/taxi still uses the feed heading for steering.
+- Less yaw/bank micro-jitter: 0.15 deg heading deadband, softer heading
+  easing, yaw rate limit 18 -> 12 deg/s, slower bank response and roll rate
+  limit 12 -> 8 deg/s.
+- Cleaner log and clearer status:
+    * harmless SimConnect exception lines (SIMCONNECT_EXCEPTION_ERROR and
+      friends) are suppressed instead of looking like failures;
+    * the table's empty state explains itself: "Waiting for a second
+      position sample... (N nearby)" or "No ElevateX flights within N NM";
+    * the injector logs "Waiting for position data: N flight(s) nearby,
+      M ready to spawn" so an empty first minute never looks broken.
+- Sidebar no longer squished: the Model matching button uses the same style
+  as Choose folder, redundant hint lines were removed and spacing tightened.
+  The first-run tour now has 8 steps, including the Model matching button.
 
 New in v1.13
 ------------
